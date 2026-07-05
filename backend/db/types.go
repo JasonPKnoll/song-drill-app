@@ -24,6 +24,7 @@ type IngestLine struct {
 	Natural     string       `json:"natural"`
 	Contextual  string       `json:"contextual"`
 	GrammarNote *string      `json:"grammar_note"`
+	Section     *string      `json:"section"`
 	Words       []IngestWord `json:"words"`
 }
 
@@ -75,6 +76,7 @@ type Line struct {
 	Natural     string  `json:"natural"`
 	Contextual  string  `json:"contextual"`
 	GrammarNote *string `json:"grammar_note,omitempty"`
+	Section     *string `json:"section,omitempty"`
 }
 
 type VocabItem struct {

@@ -29,6 +29,7 @@ export interface Line {
 	natural: string;
 	contextual: string;
 	grammar_note?: string;
+	section?: string;
 }
 
 export interface VocabItem {

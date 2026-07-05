@@ -37,7 +37,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type"},
 		AllowCredentials: false,
 	}))
@@ -47,6 +47,7 @@ func main() {
 			r.Post("/ingest", env.IngestSong)
 			r.Get("/", env.ListSongs)
 			r.Get("/{id}", env.GetSong)
+			r.Delete("/{id}", env.DeleteSong)
 			r.Get("/{id}/lines", env.GetSongLines)
 		})
 		r.Route("/drill", func(r chi.Router) {

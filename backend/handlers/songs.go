@@ -61,6 +61,26 @@ func (e *Env) GetSong(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, song)
 }
 
+// DELETE /api/song-drill/songs/{id}
+func (e *Env) DeleteSong(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid song id")
+		return
+	}
+
+	deleted, err := db.DeleteSong(e.DB, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "song not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // GET /api/song-drill/songs/{id}/lines
 func (e *Env) GetSongLines(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

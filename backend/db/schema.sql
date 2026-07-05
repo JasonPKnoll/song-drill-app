@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS lines (
     natural     TEXT NOT NULL,               -- fluent English translation
     contextual  TEXT NOT NULL,               -- emotionally framed translation
     grammar_note TEXT,
+    section     TEXT,                        -- e.g. "Verse 1", "Chorus" (nullable)
     UNIQUE(song_id, position)
 );
 

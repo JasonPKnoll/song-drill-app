@@ -44,9 +44,9 @@ func IngestSong(database *sql.DB, payload IngestPayload) (int64, error) {
 
 	for _, line := range payload.Lines {
 		lineRes, err := tx.Exec(
-			`INSERT INTO lines (song_id, position, text, reading, furi, literal, natural, contextual, grammar_note)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			songID, line.Position, line.Text, line.Reading, line.Furi, line.Literal, line.Natural, line.Contextual, line.GrammarNote,
+			`INSERT INTO lines (song_id, position, text, reading, furi, literal, natural, contextual, grammar_note, section)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			songID, line.Position, line.Text, line.Reading, line.Furi, line.Literal, line.Natural, line.Contextual, line.GrammarNote, line.Section,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("insert line at position %d: %w", line.Position, err)
@@ -124,6 +124,21 @@ func ListSongs(database *sql.DB) ([]SongSummary, error) {
 	return summaries, rows.Err()
 }
 
+// DeleteSong removes a song and (via ON DELETE CASCADE) its lines, line_words,
+// song_vocab, vocab_progress, and line_progress rows. Global vocab entries
+// shared with other songs are untouched. Returns false if no song matched id.
+func DeleteSong(database *sql.DB, id int64) (bool, error) {
+	res, err := database.Exec(`DELETE FROM songs WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // GetSong returns full song detail (lines + vocab). Returns nil, nil if not found.
 func GetSong(database *sql.DB, id int64) (*SongDetail, error) {
 	var s Song
@@ -176,7 +191,7 @@ func GetSong(database *sql.DB, id int64) (*SongDetail, error) {
 // GetSongLines returns the ordered, lossless line list for a song.
 func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 	rows, err := database.Query(`
-		SELECT id, song_id, position, text, reading, furi, literal, natural, contextual, grammar_note
+		SELECT id, song_id, position, text, reading, furi, literal, natural, contextual, grammar_note, section
 		FROM lines WHERE song_id = ? ORDER BY position ASC
 	`, songID)
 	if err != nil {
@@ -187,12 +202,15 @@ func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 	var lines []Line
 	for rows.Next() {
 		var l Line
-		var grammarNote sql.NullString
-		if err := rows.Scan(&l.ID, &l.SongID, &l.Position, &l.Text, &l.Reading, &l.Furi, &l.Literal, &l.Natural, &l.Contextual, &grammarNote); err != nil {
+		var grammarNote, section sql.NullString
+		if err := rows.Scan(&l.ID, &l.SongID, &l.Position, &l.Text, &l.Reading, &l.Furi, &l.Literal, &l.Natural, &l.Contextual, &grammarNote, &section); err != nil {
 			return nil, err
 		}
 		if grammarNote.Valid {
 			l.GrammarNote = &grammarNote.String
+		}
+		if section.Valid {
+			l.Section = &section.String
 		}
 		lines = append(lines, l)
 	}
@@ -205,7 +223,7 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 	query := `
 		SELECT
 			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, sv.context_meaning,
-			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note,
+			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note, l.section,
 			COALESCE(vp.streak, 0), COALESCE(vp.next_review, date('now'))
 		FROM song_vocab sv
 		JOIN vocab v ON v.id = sv.vocab_id
@@ -232,11 +250,11 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 	for rows.Next() {
 		var c VocabCard
 		var lineID, lineSongID, linePosition sql.NullInt64
-		var lineText, lineReading, lineFuri, lineLiteral, lineNatural, lineContextual, lineGrammarNote sql.NullString
+		var lineText, lineReading, lineFuri, lineLiteral, lineNatural, lineContextual, lineGrammarNote, lineSection sql.NullString
 
 		if err := rows.Scan(
 			&c.SongID, &c.SongTitle, &c.VocabID, &c.Surface, &c.Reading, &c.Furi, &c.ContextMeaning,
-			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote,
+			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote, &lineSection,
 			&c.Streak, &c.NextReview,
 		); err != nil {
 			return nil, err
@@ -251,6 +269,9 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 			if lineGrammarNote.Valid {
 				exLine.GrammarNote = &lineGrammarNote.String
 			}
+			if lineSection.Valid {
+				exLine.Section = &lineSection.String
+			}
 			c.ExampleLine = exLine
 		}
 
@@ -259,7 +280,9 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 	return cards, rows.Err()
 }
 
-// LineDrillQueue returns due line cards, earliest due first.
+// LineDrillQueue returns due line cards, earliest due first. Content-less lines
+// (e.g. scraped page noise with no reading/translation) are excluded — there's
+// nothing to quiz — even though they're still ingested and shown in the reader.
 func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, error) {
 	query := `
 		SELECT l.id, l.song_id, s.title, l.text, l.furi, l.natural, l.grammar_note,
@@ -267,7 +290,8 @@ func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, err
 		FROM lines l
 		JOIN songs s ON s.id = l.song_id
 		LEFT JOIN line_progress lp ON lp.line_id = l.id
-		WHERE (lp.next_review IS NULL OR lp.next_review <= date('now'))
+		WHERE l.reading != ''
+		AND (lp.next_review IS NULL OR lp.next_review <= date('now'))
 	`
 	args := []any{}
 	if songID != nil {
