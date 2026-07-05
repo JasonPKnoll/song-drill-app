@@ -82,8 +82,11 @@ export interface Stats {
 	lines_due_today: number;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`${API_BASE}${path}`, {
+// `fetchFn` defaults to the global fetch but should be given the `fetch`
+// passed into a SvelteKit `load` function when called from one — that's the
+// fetch SvelteKit tracks for the request lifecycle of the current navigation.
+async function request<T>(path: string, init?: RequestInit, fetchFn: typeof fetch = fetch): Promise<T> {
+	const res = await fetchFn(`${API_BASE}${path}`, {
 		headers: { 'Content-Type': 'application/json' },
 		...init
 	});
@@ -95,12 +98,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	return res.json();
 }
 
-export function listSongs(): Promise<SongSummary[]> {
-	return request('/songs');
+export function listSongs(fetchFn?: typeof fetch): Promise<SongSummary[]> {
+	return request('/songs', undefined, fetchFn);
 }
 
-export function getSong(id: number): Promise<SongDetail> {
-	return request(`/songs/${id}`);
+export function getSong(id: number, fetchFn?: typeof fetch): Promise<SongDetail> {
+	return request(`/songs/${id}`, undefined, fetchFn);
 }
 
 export function getSongLines(id: number): Promise<Line[]> {
@@ -111,18 +114,26 @@ export function ingestSong(payload: unknown): Promise<{ song_id: number }> {
 	return request('/songs/ingest', { method: 'POST', body: JSON.stringify(payload) });
 }
 
-export function getVocabDrillQueue(songId?: number, limit = 20): Promise<VocabCard[]> {
+export function getVocabDrillQueue(
+	songId?: number,
+	limit = 20,
+	fetchFn?: typeof fetch
+): Promise<VocabCard[]> {
 	const params = new URLSearchParams();
 	if (songId !== undefined) params.set('song_id', String(songId));
 	params.set('limit', String(limit));
-	return request(`/drill/vocab?${params}`);
+	return request(`/drill/vocab?${params}`, undefined, fetchFn);
 }
 
-export function getLineDrillQueue(songId?: number, limit = 20): Promise<LineCard[]> {
+export function getLineDrillQueue(
+	songId?: number,
+	limit = 20,
+	fetchFn?: typeof fetch
+): Promise<LineCard[]> {
 	const params = new URLSearchParams();
 	if (songId !== undefined) params.set('song_id', String(songId));
 	params.set('limit', String(limit));
-	return request(`/drill/lines?${params}`);
+	return request(`/drill/lines?${params}`, undefined, fetchFn);
 }
 
 export function recordVocabResult(

@@ -1,35 +1,24 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { page } from '$app/state';
-	import { getLineDrillQueue, recordLineResult, type LineCard } from '$lib/api';
+	import type { PageData } from './$types';
+	import { recordLineResult, type LineCard } from '$lib/api';
 	import DrillCard from '$lib/components/DrillCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
 
-	let songIdParam = $derived(page.url.searchParams.get('song_id'));
-	let songIdNum = $derived(songIdParam ? Number(songIdParam) : undefined);
-	let backHref = $derived(songIdNum !== undefined ? `/songs/${songIdNum}` : '/');
-	let backLabel = $derived(songIdNum !== undefined ? 'Back to song' : 'Back to library');
+	let { data }: { data: PageData } = $props();
 
 	let queue = $state<LineCard[]>([]);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
 	let done = $state(0);
+	let actionError = $state<string | null>(null);
 
-	onMount(load);
+	$effect(() => {
+		queue = data.queue;
+		done = 0;
+		actionError = null;
+	});
 
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			queue = await getLineDrillQueue(songIdNum);
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			loading = false;
-		}
-	}
-
+	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
+	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
 	let current = $derived(queue[0] ?? null);
 
 	async function answer(correct: boolean) {
@@ -40,7 +29,7 @@
 		try {
 			await recordLineResult(card.line_id, correct);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			actionError = e instanceof Error ? e.message : String(e);
 		}
 	}
 </script>
@@ -52,10 +41,8 @@
 	<span class="text-sm text-muted">{done} done · {queue.length} left</span>
 </div>
 
-{#if loading}
-	<p class="text-muted">Loading queue…</p>
-{:else if error}
-	<p class="text-bad">{error}</p>
+{#if data.error}
+	<p class="text-bad">{data.error}</p>
 {:else if !current}
 	<div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
 		Nothing due right now. Nice work.
@@ -80,4 +67,8 @@
 			{/snippet}
 		</DrillCard>
 	{/key}
+{/if}
+
+{#if actionError}
+	<p class="mt-3 text-sm text-bad">{actionError}</p>
 {/if}

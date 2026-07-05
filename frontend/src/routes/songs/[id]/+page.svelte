@@ -1,31 +1,14 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { page } from '$app/state';
-	import { getSong, type SongDetail } from '$lib/api';
+	import type { PageData } from './$types';
 	import BackLink from '$lib/components/BackLink.svelte';
 
-	let songId = $derived(Number(page.params.id));
-
-	let song = $state<SongDetail | null>(null);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
-
-	onMount(async () => {
-		try {
-			song = await getSong(songId);
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
-		} finally {
-			loading = false;
-		}
-	});
+	let { data }: { data: PageData } = $props();
 </script>
 
-{#if loading}
-	<p class="text-muted">Loading…</p>
-{:else if error}
-	<p class="text-bad">Failed to load song: {error}</p>
-{:else if song}
+{#if data.error}
+	<p class="text-bad">Failed to load song: {data.error}</p>
+{:else if data.song}
+	{@const song = data.song}
 	<BackLink href="/" label="Back to library" />
 
 	<div class="mb-6">
