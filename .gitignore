@@ -1,0 +1,13 @@
+# Backend
+backend/song-drill-api
+backend/*.db
+*.db
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+frontend/vite.config.ts.timestamp-*
+
+# OS
+.DS_Store

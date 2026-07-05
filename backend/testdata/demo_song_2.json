@@ -1,0 +1,228 @@
+{
+  "song": {
+    "title": "雨音",
+    "artist": "Demo Artist 2 (invented, not a real song)",
+    "language": "ja",
+    "notes": "An invented demo song about walking in the rain without an umbrella, standing in for choosing to feel something instead of shielding yourself from it."
+  },
+  "lines": [
+    {
+      "position": 0,
+      "text": "雨の音が窓を叩く",
+      "reading": "あめのおとがまどをたたく",
+      "furi": "雨[あめ]の音[おと]が窓[まど]を叩[たた]く",
+      "literal": "Rain's sound window hits",
+      "natural": "The sound of rain taps at the window",
+      "contextual": "Something insistent trying to get your attention, softly",
+      "grammar_note": null,
+      "words": [
+        {
+          "surface": "雨",
+          "reading": "あめ",
+          "furi": "雨[あめ]",
+          "pos": "noun",
+          "base_meaning": "rain",
+          "context_meaning": "the thing that won't stop reminding you"
+        },
+        {
+          "surface": "音",
+          "reading": "おと",
+          "furi": "音[おと]",
+          "pos": "noun",
+          "base_meaning": "sound",
+          "context_meaning": "a small, persistent presence"
+        },
+        {
+          "surface": "窓",
+          "reading": "まど",
+          "furi": "窓[まど]",
+          "pos": "noun",
+          "base_meaning": "window",
+          "context_meaning": "the thin barrier between you and everything outside"
+        },
+        {
+          "surface": "叩く",
+          "reading": "たたく",
+          "furi": "叩[たた]く",
+          "pos": "verb",
+          "base_meaning": "to hit / to knock",
+          "context_meaning": "to insist gently, again and again"
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "text": "傘も差さずに歩いた",
+      "reading": "かさもささずにあるいた",
+      "furi": "傘[かさ]も差[さ]さずに歩[ある]いた",
+      "literal": "Umbrella even not-opening walked",
+      "natural": "I walked without even opening an umbrella",
+      "contextual": "Choosing to feel it instead of hiding from it",
+      "grammar_note": "ずに means \"without doing\"",
+      "words": [
+        {
+          "surface": "傘",
+          "reading": "かさ",
+          "furi": "傘[かさ]",
+          "pos": "noun",
+          "base_meaning": "umbrella",
+          "context_meaning": "the protection you didn't want this time"
+        },
+        {
+          "surface": "差さずに",
+          "reading": "ささずに",
+          "furi": "差[さ]さずに",
+          "pos": "verb",
+          "base_meaning": "to not hold up / not open",
+          "context_meaning": "refusing shelter on purpose"
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "text": "風が涙を連れて行く",
+      "reading": "かぜがなみだをつれていく",
+      "furi": "風[かぜ]が涙[なみだ]を連[つ]れて行[い]く",
+      "literal": "Wind subject tears object bring-go",
+      "natural": "The wind carries my tears away",
+      "contextual": "Something outside doing the work of letting go that you couldn't do yourself",
+      "grammar_note": null,
+      "words": [
+        {
+          "surface": "風",
+          "reading": "かぜ",
+          "furi": "風[かぜ]",
+          "pos": "noun",
+          "base_meaning": "wind",
+          "context_meaning": "something that takes what you can't put down yourself"
+        },
+        {
+          "surface": "涙",
+          "reading": "なみだ",
+          "furi": "涙[なみだ]",
+          "pos": "noun",
+          "base_meaning": "tears",
+          "context_meaning": "proof you felt it, even if you never said so"
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "text": "雨の音が窓を叩く",
+      "reading": "あめのおとがまどをたたく",
+      "furi": "雨[あめ]の音[おと]が窓[まど]を叩[たた]く",
+      "literal": "Rain's sound window hits",
+      "natural": "The sound of rain taps at the window",
+      "contextual": "The same small reminder, still knocking",
+      "grammar_note": null,
+      "words": [
+        {
+          "surface": "雨",
+          "reading": "あめ",
+          "furi": "雨[あめ]",
+          "pos": "noun",
+          "base_meaning": "rain",
+          "context_meaning": "the thing that won't stop reminding you"
+        },
+        {
+          "surface": "音",
+          "reading": "おと",
+          "furi": "音[おと]",
+          "pos": "noun",
+          "base_meaning": "sound",
+          "context_meaning": "a small, persistent presence"
+        },
+        {
+          "surface": "窓",
+          "reading": "まど",
+          "furi": "窓[まど]",
+          "pos": "noun",
+          "base_meaning": "window",
+          "context_meaning": "the thin barrier between you and everything outside"
+        },
+        {
+          "surface": "叩く",
+          "reading": "たたく",
+          "furi": "叩[たた]く",
+          "pos": "verb",
+          "base_meaning": "to hit / to knock",
+          "context_meaning": "to insist gently, again and again"
+        }
+      ]
+    }
+  ],
+  "vocab": [
+    {
+      "surface": "雨",
+      "reading": "あめ",
+      "furi": "雨[あめ]",
+      "pos": "noun",
+      "base_meaning": "rain",
+      "context_meaning": "the thing that won't stop reminding you",
+      "first_line_position": 0
+    },
+    {
+      "surface": "音",
+      "reading": "おと",
+      "furi": "音[おと]",
+      "pos": "noun",
+      "base_meaning": "sound",
+      "context_meaning": "a small, persistent presence",
+      "first_line_position": 0
+    },
+    {
+      "surface": "窓",
+      "reading": "まど",
+      "furi": "窓[まど]",
+      "pos": "noun",
+      "base_meaning": "window",
+      "context_meaning": "the thin barrier between you and everything outside",
+      "first_line_position": 0
+    },
+    {
+      "surface": "叩く",
+      "reading": "たたく",
+      "furi": "叩[たた]く",
+      "pos": "verb",
+      "base_meaning": "to hit / to knock",
+      "context_meaning": "to insist gently, again and again",
+      "first_line_position": 0
+    },
+    {
+      "surface": "傘",
+      "reading": "かさ",
+      "furi": "傘[かさ]",
+      "pos": "noun",
+      "base_meaning": "umbrella",
+      "context_meaning": "the protection you didn't want this time",
+      "first_line_position": 1
+    },
+    {
+      "surface": "差さずに",
+      "reading": "ささずに",
+      "furi": "差[さ]さずに",
+      "pos": "verb",
+      "base_meaning": "to not hold up / not open",
+      "context_meaning": "refusing shelter on purpose",
+      "first_line_position": 1
+    },
+    {
+      "surface": "風",
+      "reading": "かぜ",
+      "furi": "風[かぜ]",
+      "pos": "noun",
+      "base_meaning": "wind",
+      "context_meaning": "something that takes what you can't put down yourself",
+      "first_line_position": 2
+    },
+    {
+      "surface": "涙",
+      "reading": "なみだ",
+      "furi": "涙[なみだ]",
+      "pos": "noun",
+      "base_meaning": "tears",
+      "context_meaning": "proof you felt it, even if you never said so",
+      "first_line_position": 2
+    }
+  ]
+}

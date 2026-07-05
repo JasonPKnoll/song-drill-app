@@ -1,0 +1,384 @@
+package db
+
+import (
+	"database/sql"
+	"fmt"
+
+	"song-drill-backend/srs"
+)
+
+// IngestSong writes a full song payload into the database inside a single
+// transaction, following the ingest logic in song_drill_schema.md.
+func IngestSong(database *sql.DB, payload IngestPayload) (int64, error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`INSERT INTO songs (title, artist, language, notes) VALUES (?, ?, ?, ?)`,
+		payload.Song.Title, payload.Song.Artist, payload.Song.Language, payload.Song.Notes,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert song: %w", err)
+	}
+	songID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	upsertVocab := func(surface, reading, furi, pos, baseMeaning string) (int64, error) {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO vocab (surface, reading, furi, pos, base_meaning) VALUES (?, ?, ?, ?, ?)`,
+			surface, reading, furi, pos, baseMeaning,
+		); err != nil {
+			return 0, fmt.Errorf("insert vocab %q: %w", surface, err)
+		}
+		var id int64
+		if err := tx.QueryRow(`SELECT id FROM vocab WHERE surface = ? AND reading = ?`, surface, reading).Scan(&id); err != nil {
+			return 0, fmt.Errorf("select vocab id %q: %w", surface, err)
+		}
+		return id, nil
+	}
+
+	for _, line := range payload.Lines {
+		lineRes, err := tx.Exec(
+			`INSERT INTO lines (song_id, position, text, reading, furi, literal, natural, contextual, grammar_note)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			songID, line.Position, line.Text, line.Reading, line.Furi, line.Literal, line.Natural, line.Contextual, line.GrammarNote,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("insert line at position %d: %w", line.Position, err)
+		}
+		lineID, err := lineRes.LastInsertId()
+		if err != nil {
+			return 0, err
+		}
+
+		for i, word := range line.Words {
+			vocabID, err := upsertVocab(word.Surface, word.Reading, word.Furi, word.POS, word.BaseMeaning)
+			if err != nil {
+				return 0, err
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO line_words (line_id, vocab_id, position) VALUES (?, ?, ?)`,
+				lineID, vocabID, i,
+			); err != nil {
+				return 0, fmt.Errorf("insert line_word: %w", err)
+			}
+		}
+	}
+
+	for _, v := range payload.Vocab {
+		vocabID, err := upsertVocab(v.Surface, v.Reading, v.Furi, v.POS, v.BaseMeaning)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO song_vocab (song_id, vocab_id, context_meaning, first_line_position)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(song_id, vocab_id) DO UPDATE SET
+			   context_meaning = excluded.context_meaning,
+			   first_line_position = excluded.first_line_position`,
+			songID, vocabID, v.ContextMeaning, v.FirstLinePosition,
+		); err != nil {
+			return 0, fmt.Errorf("insert song_vocab: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return songID, nil
+}
+
+// ListSongs returns every song with aggregate progress stats for the library home screen.
+func ListSongs(database *sql.DB) ([]SongSummary, error) {
+	rows, err := database.Query(`
+		SELECT
+			s.id, s.title, s.artist, s.language, s.notes, s.created_at,
+			(SELECT COUNT(*) FROM song_vocab sv WHERE sv.song_id = s.id) AS vocab_count,
+			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.streak >= ?) AS mastered_count,
+			(SELECT COUNT(*) FROM lines l WHERE l.song_id = s.id) AS line_count
+		FROM songs s
+		ORDER BY s.created_at DESC, s.id DESC
+	`, srs.MasteredStreak)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []SongSummary
+	for rows.Next() {
+		var s SongSummary
+		var notes sql.NullString
+		if err := rows.Scan(&s.ID, &s.Title, &s.Artist, &s.Language, &notes, &s.CreatedAt, &s.VocabCount, &s.MasteredCount, &s.LineCount); err != nil {
+			return nil, err
+		}
+		if notes.Valid {
+			s.Notes = &notes.String
+		}
+		summaries = append(summaries, s)
+	}
+	return summaries, rows.Err()
+}
+
+// GetSong returns full song detail (lines + vocab). Returns nil, nil if not found.
+func GetSong(database *sql.DB, id int64) (*SongDetail, error) {
+	var s Song
+	var notes sql.NullString
+	err := database.QueryRow(
+		`SELECT id, title, artist, language, notes, created_at FROM songs WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Title, &s.Artist, &s.Language, &notes, &s.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if notes.Valid {
+		s.Notes = &notes.String
+	}
+
+	lines, err := GetSongLines(database, id)
+	if err != nil {
+		return nil, err
+	}
+
+	vocabRows, err := database.Query(`
+		SELECT v.id, v.surface, v.reading, v.furi, v.pos, v.base_meaning, sv.context_meaning, sv.first_line_position
+		FROM song_vocab sv
+		JOIN vocab v ON v.id = sv.vocab_id
+		WHERE sv.song_id = ?
+		ORDER BY sv.first_line_position ASC
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer vocabRows.Close()
+
+	var vocab []VocabItem
+	for vocabRows.Next() {
+		var v VocabItem
+		if err := vocabRows.Scan(&v.ID, &v.Surface, &v.Reading, &v.Furi, &v.POS, &v.BaseMeaning, &v.ContextMeaning, &v.FirstLinePosition); err != nil {
+			return nil, err
+		}
+		vocab = append(vocab, v)
+	}
+	if err := vocabRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &SongDetail{Song: s, Lines: lines, Vocab: vocab}, nil
+}
+
+// GetSongLines returns the ordered, lossless line list for a song.
+func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
+	rows, err := database.Query(`
+		SELECT id, song_id, position, text, reading, furi, literal, natural, contextual, grammar_note
+		FROM lines WHERE song_id = ? ORDER BY position ASC
+	`, songID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var lines []Line
+	for rows.Next() {
+		var l Line
+		var grammarNote sql.NullString
+		if err := rows.Scan(&l.ID, &l.SongID, &l.Position, &l.Text, &l.Reading, &l.Furi, &l.Literal, &l.Natural, &l.Contextual, &grammarNote); err != nil {
+			return nil, err
+		}
+		if grammarNote.Valid {
+			l.GrammarNote = &grammarNote.String
+		}
+		lines = append(lines, l)
+	}
+	return lines, rows.Err()
+}
+
+// VocabDrillQueue returns due vocab cards (or all-time-new cards with no progress
+// row yet), earliest due first. If songID is nil, pulls across all songs.
+func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, error) {
+	query := `
+		SELECT
+			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, sv.context_meaning,
+			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note,
+			COALESCE(vp.streak, 0), COALESCE(vp.next_review, date('now'))
+		FROM song_vocab sv
+		JOIN vocab v ON v.id = sv.vocab_id
+		JOIN songs s ON s.id = sv.song_id
+		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
+		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
+		WHERE (vp.next_review IS NULL OR vp.next_review <= date('now'))
+	`
+	args := []any{}
+	if songID != nil {
+		query += " AND sv.song_id = ?"
+		args = append(args, *songID)
+	}
+	query += " ORDER BY COALESCE(vp.next_review, date('now')) ASC, sv.first_line_position ASC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cards []VocabCard
+	for rows.Next() {
+		var c VocabCard
+		var lineID, lineSongID, linePosition sql.NullInt64
+		var lineText, lineReading, lineFuri, lineLiteral, lineNatural, lineContextual, lineGrammarNote sql.NullString
+
+		if err := rows.Scan(
+			&c.SongID, &c.SongTitle, &c.VocabID, &c.Surface, &c.Reading, &c.Furi, &c.ContextMeaning,
+			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote,
+			&c.Streak, &c.NextReview,
+		); err != nil {
+			return nil, err
+		}
+
+		if lineID.Valid {
+			exLine := &Line{
+				ID: lineID.Int64, SongID: lineSongID.Int64, Position: int(linePosition.Int64),
+				Text: lineText.String, Reading: lineReading.String, Furi: lineFuri.String,
+				Literal: lineLiteral.String, Natural: lineNatural.String, Contextual: lineContextual.String,
+			}
+			if lineGrammarNote.Valid {
+				exLine.GrammarNote = &lineGrammarNote.String
+			}
+			c.ExampleLine = exLine
+		}
+
+		cards = append(cards, c)
+	}
+	return cards, rows.Err()
+}
+
+// LineDrillQueue returns due line cards, earliest due first.
+func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, error) {
+	query := `
+		SELECT l.id, l.song_id, s.title, l.text, l.furi, l.natural, l.grammar_note,
+			COALESCE(lp.streak, 0), COALESCE(lp.next_review, date('now'))
+		FROM lines l
+		JOIN songs s ON s.id = l.song_id
+		LEFT JOIN line_progress lp ON lp.line_id = l.id
+		WHERE (lp.next_review IS NULL OR lp.next_review <= date('now'))
+	`
+	args := []any{}
+	if songID != nil {
+		query += " AND l.song_id = ?"
+		args = append(args, *songID)
+	}
+	query += " ORDER BY COALESCE(lp.next_review, date('now')) ASC, l.position ASC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cards []LineCard
+	for rows.Next() {
+		var c LineCard
+		var grammarNote sql.NullString
+		if err := rows.Scan(&c.LineID, &c.SongID, &c.SongTitle, &c.Text, &c.Furi, &c.Natural, &grammarNote, &c.Streak, &c.NextReview); err != nil {
+			return nil, err
+		}
+		if grammarNote.Valid {
+			c.GrammarNote = &grammarNote.String
+		}
+		cards = append(cards, c)
+	}
+	return cards, rows.Err()
+}
+
+// RecordVocabResult upserts vocab_progress for (songID, vocabID) applying the SRS update.
+func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) error {
+	var streak int
+	err := database.QueryRow(`SELECT streak FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`, songID, vocabID).Scan(&streak)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	newStreak, nextReview := srs.Update(streak, correct)
+	correctInc := 0
+	if correct {
+		correctInc = 1
+	}
+	_, err = database.Exec(`
+		INSERT INTO vocab_progress (song_id, vocab_id, streak, seen, correct, next_review, last_seen)
+		VALUES (?, ?, ?, 1, ?, ?, date('now'))
+		ON CONFLICT(song_id, vocab_id) DO UPDATE SET
+			streak = excluded.streak,
+			seen = vocab_progress.seen + 1,
+			correct = vocab_progress.correct + ?,
+			next_review = excluded.next_review,
+			last_seen = date('now')
+	`, songID, vocabID, newStreak, correctInc, nextReview, correctInc)
+	return err
+}
+
+// RecordLineResult upserts line_progress for lineID applying the SRS update.
+func RecordLineResult(database *sql.DB, lineID int64, correct bool) error {
+	var streak int
+	err := database.QueryRow(`SELECT streak FROM line_progress WHERE line_id = ?`, lineID).Scan(&streak)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	newStreak, nextReview := srs.Update(streak, correct)
+	correctInc := 0
+	if correct {
+		correctInc = 1
+	}
+	_, err = database.Exec(`
+		INSERT INTO line_progress (line_id, streak, seen, correct, next_review, last_seen)
+		VALUES (?, ?, 1, ?, ?, date('now'))
+		ON CONFLICT(line_id) DO UPDATE SET
+			streak = excluded.streak,
+			seen = line_progress.seen + 1,
+			correct = line_progress.correct + ?,
+			next_review = excluded.next_review,
+			last_seen = date('now')
+	`, lineID, newStreak, correctInc, nextReview, correctInc)
+	return err
+}
+
+// GetStats returns overall progress stats across every song.
+func GetStats(database *sql.DB) (*Stats, error) {
+	var st Stats
+	if err := database.QueryRow(`SELECT COUNT(*) FROM songs`).Scan(&st.TotalSongs); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM song_vocab`).Scan(&st.TotalVocab); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE streak >= ?`, srs.MasteredStreak).Scan(&st.MasteredVocab); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM lines`).Scan(&st.TotalLines); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM line_progress WHERE streak >= ?`, srs.MasteredStreak).Scan(&st.MasteredLines); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM song_vocab sv
+		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
+		WHERE vp.next_review IS NULL OR vp.next_review <= date('now')
+	`).Scan(&st.VocabDueToday); err != nil {
+		return nil, err
+	}
+	if err := database.QueryRow(`
+		SELECT COUNT(*) FROM lines l
+		LEFT JOIN line_progress lp ON lp.line_id = l.id
+		WHERE lp.next_review IS NULL OR lp.next_review <= date('now')
+	`).Scan(&st.LinesDueToday); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}

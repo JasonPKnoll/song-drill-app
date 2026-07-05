@@ -1,0 +1,186 @@
+{
+  "song": {
+    "title": "紙飛行機",
+    "artist": "Demo Artist (invented, not a real song)",
+    "language": "ja",
+    "notes": "An invented demo song about a paper airplane thrown from a rooftop, standing in for hope let loose without knowing where it lands."
+  },
+  "lines": [
+    {
+      "position": 0,
+      "text": "屋上から紙飛行機を飛ばした",
+      "reading": "おくじょうからかみひこうきをとばした",
+      "furi": "屋上[おくじょう]から紙飛行機[かみひこうき]を飛[と]ばした",
+      "literal": "From the rooftop, paper airplane threw",
+      "natural": "I threw a paper airplane from the rooftop",
+      "contextual": "Letting go of something small and fragile, just to see where it goes",
+      "grammar_note": "から marks the starting point of motion; を marks the direct object being thrown",
+      "words": [
+        {
+          "surface": "屋上",
+          "reading": "おくじょう",
+          "furi": "屋上[おくじょう]",
+          "pos": "noun",
+          "base_meaning": "rooftop",
+          "context_meaning": "the highest point, where you can finally let something go"
+        },
+        {
+          "surface": "紙飛行機",
+          "reading": "かみひこうき",
+          "furi": "紙飛行機[かみひこうき]",
+          "pos": "noun",
+          "base_meaning": "paper airplane",
+          "context_meaning": "a small hope, folded by hand, sent out with no guarantee"
+        },
+        {
+          "surface": "飛ばした",
+          "reading": "とばした",
+          "furi": "飛[と]ばした",
+          "pos": "verb",
+          "base_meaning": "to fly / to launch",
+          "context_meaning": "to release something and let it find its own way"
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "text": "風に乗ってどこまでも行け",
+      "reading": "かぜにのってどこまでもいけ",
+      "furi": "風[かぜ]に乗[の]ってどこまでも行[い]け",
+      "literal": "Wind on ride, to anywhere go",
+      "natural": "Ride the wind and go as far as you can",
+      "contextual": "A wish thrown after it, since you can't follow it yourself",
+      "grammar_note": null,
+      "words": [
+        {
+          "surface": "風",
+          "reading": "かぜ",
+          "furi": "風[かぜ]",
+          "pos": "noun",
+          "base_meaning": "wind",
+          "context_meaning": "the only thing that can carry your hope further than you can"
+        },
+        {
+          "surface": "乗って",
+          "reading": "のって",
+          "furi": "乗[の]って",
+          "pos": "verb",
+          "base_meaning": "to ride / to get on",
+          "context_meaning": "to trust something bigger than yourself to carry you"
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "text": "戻らなくていいから",
+      "reading": "もどらなくていいから",
+      "furi": "戻[もど]らなくていいから",
+      "literal": "Return not-need-to because",
+      "natural": "You don't need to come back",
+      "contextual": "Releasing it fully, without wanting it returned",
+      "grammar_note": "なくていい expresses permission not to do something",
+      "words": [
+        {
+          "surface": "戻らなくて",
+          "reading": "もどらなくて",
+          "furi": "戻[もど]らなくて",
+          "pos": "verb",
+          "base_meaning": "to not return",
+          "context_meaning": "letting go without expecting anything back"
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "text": "屋上から紙飛行機を飛ばした",
+      "reading": "おくじょうからかみひこうきをとばした",
+      "furi": "屋上[おくじょう]から紙飛行機[かみひこうき]を飛[と]ばした",
+      "literal": "From the rooftop, paper airplane threw",
+      "natural": "I threw a paper airplane from the rooftop",
+      "contextual": "The same small act of hope, repeated because once wasn't enough",
+      "grammar_note": null,
+      "words": [
+        {
+          "surface": "屋上",
+          "reading": "おくじょう",
+          "furi": "屋上[おくじょう]",
+          "pos": "noun",
+          "base_meaning": "rooftop",
+          "context_meaning": "the highest point, where you can finally let something go"
+        },
+        {
+          "surface": "紙飛行機",
+          "reading": "かみひこうき",
+          "furi": "紙飛行機[かみひこうき]",
+          "pos": "noun",
+          "base_meaning": "paper airplane",
+          "context_meaning": "a small hope, folded by hand, sent out with no guarantee"
+        },
+        {
+          "surface": "飛ばした",
+          "reading": "とばした",
+          "furi": "飛[と]ばした",
+          "pos": "verb",
+          "base_meaning": "to fly / to launch",
+          "context_meaning": "to release something and let it find its own way"
+        }
+      ]
+    }
+  ],
+  "vocab": [
+    {
+      "surface": "屋上",
+      "reading": "おくじょう",
+      "furi": "屋上[おくじょう]",
+      "pos": "noun",
+      "base_meaning": "rooftop",
+      "context_meaning": "the highest point, where you can finally let something go",
+      "first_line_position": 0
+    },
+    {
+      "surface": "紙飛行機",
+      "reading": "かみひこうき",
+      "furi": "紙飛行機[かみひこうき]",
+      "pos": "noun",
+      "base_meaning": "paper airplane",
+      "context_meaning": "a small hope, folded by hand, sent out with no guarantee",
+      "first_line_position": 0
+    },
+    {
+      "surface": "飛ばした",
+      "reading": "とばした",
+      "furi": "飛[と]ばした",
+      "pos": "verb",
+      "base_meaning": "to fly / to launch",
+      "context_meaning": "to release something and let it find its own way",
+      "first_line_position": 0
+    },
+    {
+      "surface": "風",
+      "reading": "かぜ",
+      "furi": "風[かぜ]",
+      "pos": "noun",
+      "base_meaning": "wind",
+      "context_meaning": "the only thing that can carry your hope further than you can",
+      "first_line_position": 1
+    },
+    {
+      "surface": "乗って",
+      "reading": "のって",
+      "furi": "乗[の]って",
+      "pos": "verb",
+      "base_meaning": "to ride / to get on",
+      "context_meaning": "to trust something bigger than yourself to carry you",
+      "first_line_position": 1
+    },
+    {
+      "surface": "戻らなくて",
+      "reading": "もどらなくて",
+      "furi": "戻[もど]らなくて",
+      "pos": "verb",
+      "base_meaning": "to not return",
+      "context_meaning": "letting go without expecting anything back",
+      "first_line_position": 2
+    }
+  ]
+}

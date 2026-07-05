@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+@theme {
+	--color-bg: #0d0d12;
+	--color-surface: #16161f;
+	--color-border: #22222e;
+	--color-accent: #a78bfa;
+	--color-good: #6ee7a0;
+	--color-bad: #f87171;
+	--color-mastered: #fbbf24;
+	--color-ink: #f0f0f0;
+	--color-muted: #6b6b80;
+}
+
+body {
+	background-color: var(--color-bg);
+	color: var(--color-ink);
+}
+
+ruby {
+	ruby-align: center;
+}
+
+ruby rt {
+	color: var(--color-accent);
+	font-size: 0.55em;
+	user-select: none;
+}
