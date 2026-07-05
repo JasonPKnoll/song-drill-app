@@ -21,7 +21,7 @@
 		{/if}
 	</div>
 
-	<div class="grid gap-3 sm:grid-cols-3">
+	<div class="grid gap-3 sm:grid-cols-2">
 		<a
 			href={`/drill/vocab?song_id=${song.id}`}
 			class="rounded-2xl border border-border bg-surface p-5 text-center transition hover:border-accent/50"
@@ -35,6 +35,13 @@
 		>
 			<p class="font-medium text-ink">Line drill</p>
 			<p class="mt-1 text-sm text-muted">{song.lines.length} lines</p>
+		</a>
+		<a
+			href={`/songs/${song.id}/vocab`}
+			class="rounded-2xl border border-border bg-surface p-5 text-center transition hover:border-accent/50"
+		>
+			<p class="font-medium text-ink">Browse vocab</p>
+			<p class="mt-1 text-sm text-muted">Search & flip through</p>
 		</a>
 		<a
 			href={`/songs/${song.id}/reader`}
