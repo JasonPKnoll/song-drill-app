@@ -1,4 +1,7 @@
-const API_BASE = 'http://localhost:30001/api/song-drill';
+// Relative so it works whether the page is loaded from localhost, an ngrok
+// tunnel, or the deployed host — the dev server (or nginx in production)
+// proxies this path to the Go backend rather than the browser hitting it directly.
+const API_BASE = '/api/song-drill';
 
 export interface Song {
 	id: number;

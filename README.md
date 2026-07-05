@@ -87,6 +87,17 @@ curl -X POST http://localhost:30001/api/song-drill/songs/ingest \
 Built as a static SvelteKit export served by Nginx on the Pi. The Go binary runs
 alongside as a systemd service. Accessible via Tailscale at the Pi's hostname.
 
+The frontend calls the API with relative paths (`/api/song-drill/...`), so Nginx
+must proxy that path to the Go backend — the browser has no way to reach the
+backend's `localhost:30001` directly once it's loaded the page from the Pi's
+Tailscale address. Add to the Nginx server block:
+
+```nginx
+location /api/song-drill/ {
+    proxy_pass http://127.0.0.1:30001;
+}
+```
+
 ```bash
 # frontend
 cd frontend && npm run build
