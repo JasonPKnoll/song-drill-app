@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { getSong, type SongDetail } from '$lib/api';
 	import Furigana from '$lib/components/Furigana.svelte';
+	import BackLink from '$lib/components/BackLink.svelte';
 
 	let songId = $derived(Number(page.params.id));
 
@@ -37,6 +38,8 @@
 {:else if error}
 	<p class="text-bad">Failed to load song: {error}</p>
 {:else if song}
+	<BackLink href={`/songs/${song.id}`} label="Back to {song.title}" />
+
 	<div class="mb-6">
 		<h1 class="text-2xl font-semibold text-ink">{song.title}</h1>
 		<p class="text-muted">{song.artist} · Song reader</p>

@@ -4,9 +4,12 @@
 	import { getVocabDrillQueue, recordVocabResult, type VocabCard } from '$lib/api';
 	import DrillCard from '$lib/components/DrillCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
+	import BackLink from '$lib/components/BackLink.svelte';
 
 	let songIdParam = $derived(page.url.searchParams.get('song_id'));
 	let songIdNum = $derived(songIdParam ? Number(songIdParam) : undefined);
+	let backHref = $derived(songIdNum !== undefined ? `/songs/${songIdNum}` : '/');
+	let backLabel = $derived(songIdNum !== undefined ? 'Back to song' : 'Back to library');
 
 	let queue = $state<VocabCard[]>([]);
 	let loading = $state(true);
@@ -41,6 +44,8 @@
 		}
 	}
 </script>
+
+<BackLink href={backHref} label={backLabel} />
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Vocab Drill</h1>
