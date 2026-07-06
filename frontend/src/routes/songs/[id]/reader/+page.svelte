@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { fade } from 'svelte/transition';
 	import type { PageData } from './$types';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
@@ -45,6 +46,48 @@
 			window.scrollBy(0, anchorEl.getBoundingClientRect().top - beforeTop);
 		}
 	}
+
+	// Show the expand/collapse toggle near the top of the page when you're near
+	// the top, near the bottom when you're near the bottom, and hide it while
+	// reading through the middle so it doesn't sit over content you're reading.
+	const EDGE_THRESHOLD = 0.15;
+
+	let scrollY = $state(0);
+	let viewportHeight = $state(0);
+	let docHeight = $state(0);
+
+	function readScrollMetrics() {
+		scrollY = window.scrollY;
+		viewportHeight = window.innerHeight;
+		docHeight = document.documentElement.scrollHeight;
+	}
+
+	let scrollTicking = false;
+	function onScroll() {
+		if (scrollTicking) return;
+		scrollTicking = true;
+		requestAnimationFrame(() => {
+			readScrollMetrics();
+			scrollTicking = false;
+		});
+	}
+
+	$effect(() => {
+		readScrollMetrics();
+		window.addEventListener('scroll', onScroll, { passive: true });
+		window.addEventListener('resize', onScroll);
+		return () => {
+			window.removeEventListener('scroll', onScroll);
+			window.removeEventListener('resize', onScroll);
+		};
+	});
+
+	let scrollableHeight = $derived(Math.max(docHeight - viewportHeight, 0));
+	let scrollProgress = $derived(scrollableHeight > 0 ? scrollY / scrollableHeight : 0);
+	let nearTop = $derived(scrollableHeight === 0 || scrollProgress <= EDGE_THRESHOLD);
+	let nearBottom = $derived(scrollableHeight > 0 && scrollProgress >= 1 - EDGE_THRESHOLD);
+	let showToggleButton = $derived(nearTop || nearBottom);
+	let togglePosition = $derived(nearBottom && !nearTop ? 'bottom' : 'top');
 </script>
 
 {#if data.error}
@@ -93,18 +136,24 @@
 		{/each}
 	</div>
 
-	<button
-		type="button"
-		class="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-20 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-bg shadow-lg shadow-black/40 transition active:scale-95"
-		onclick={toggleAll}
-		aria-label={allExpanded ? 'Collapse all lines' : 'Expand all lines'}
-	>
-		{#if allExpanded}
-			<ChevronUp size={24} strokeWidth={2.5} />
-		{:else}
-			<ChevronDown size={24} strokeWidth={2.5} />
-		{/if}
-	</button>
+	{#if showToggleButton}
+		<button
+			type="button"
+			class="fixed right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-bg shadow-lg shadow-black/40 transition active:scale-95 {togglePosition ===
+			'top'
+				? 'top-[calc(1rem+env(safe-area-inset-top))]'
+				: 'bottom-[calc(1rem+env(safe-area-inset-bottom))]'}"
+			onclick={toggleAll}
+			aria-label={allExpanded ? 'Collapse all lines' : 'Expand all lines'}
+			transition:fade={{ duration: 150 }}
+		>
+			{#if allExpanded}
+				<ChevronUp size={24} strokeWidth={2.5} />
+			{:else}
+				<ChevronDown size={24} strokeWidth={2.5} />
+			{/if}
+		</button>
+	{/if}
 {:else}
 	<p class="text-bad">Song not found.</p>
 {/if}
