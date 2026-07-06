@@ -80,6 +80,22 @@ curl -X POST http://localhost:30001/api/song-drill/songs/ingest \
   -d @path/to/song_output.json
 ```
 
+### Import from lyrics-annotator
+
+With the backend running, import every song `lyrics-annotator` has produced so far:
+
+```bash
+cd backend
+python3 scripts/import_annotator_output.py
+```
+
+Defaults to `../lyrics-annotator/output` (siblings under the same parent
+directory) and `http://localhost:30001`; override with `--output-dir` /
+`--api`. Checkpoint files (anything with "checkpoint" in the name, and
+dotfiles) are always skipped. Songs already in the database — matched by
+title + artist — are skipped too, so it's safe to re-run as the annotator
+produces more output. Add `--dry-run` to preview without ingesting anything.
+
 ---
 
 ## Deployment

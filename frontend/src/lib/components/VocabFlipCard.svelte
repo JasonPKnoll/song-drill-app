@@ -19,13 +19,12 @@
 			<p class="text-sm text-muted">Tap to reveal</p>
 		</div>
 		<div
-			class="flip-card-face flip-card-back flex flex-col items-center justify-center gap-2 overflow-y-auto rounded-2xl border border-border bg-surface p-6 text-center"
+			class="flip-card-face flip-card-back flex flex-col items-center justify-center gap-3 overflow-y-auto rounded-2xl border border-border bg-surface p-6 text-center"
 		>
 			<p class="text-2xl text-ink">
 				<Furigana furi={vocab.furi} />
 			</p>
-			<p class="text-good">{vocab.context_meaning}</p>
-			<p class="text-sm text-muted">dictionary: {vocab.base_meaning}</p>
+			<p class="text-xl font-medium text-good">{vocab.base_meaning}</p>
 		</div>
 	</div>
 </button>
