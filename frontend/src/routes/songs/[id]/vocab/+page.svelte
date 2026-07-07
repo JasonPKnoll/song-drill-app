@@ -1,11 +1,20 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import { page } from '$app/state';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import VocabFlipCard from '$lib/components/VocabFlipCard.svelte';
+	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 
 	let { data }: { data: PageData } = $props();
 
-	let query = $state('');
+	// Pre-filled when arriving from the song reader's "look up this line's
+	// vocab" link (?q=<full line text>) — see the reverse-containment check
+	// below, since a whole sentence won't ever be a substring of a single word.
+	// That same link is also what the top-right "back to reader" button
+	// requires: without a specific line to return to, there's nothing to go
+	// back to, so it only makes sense to show up in that referred-from flow.
+	let cameFromReader = page.url.searchParams.has('q');
+	let query = $state(page.url.searchParams.get('q') ?? '');
 	let flipped = $state<Set<number>>(new Set());
 
 	function toggle(id: number) {
@@ -26,6 +35,7 @@
 		return data.song.vocab.filter(
 			(v) =>
 				v.surface.includes(raw) ||
+				raw.includes(v.surface) ||
 				v.reading.includes(raw) ||
 				v.base_meaning.toLowerCase().includes(q) ||
 				v.context_meaning.toLowerCase().includes(q)
@@ -39,9 +49,20 @@
 	{@const song = data.song}
 	<BackLink href={`/songs/${song.id}`} label="Back to {song.title}" />
 
-	<div class="mb-6">
-		<h1 class="text-2xl font-semibold text-ink">{song.title}</h1>
-		<p class="text-muted">{song.artist} · Browse vocab</p>
+	<div class="mb-6 flex items-start justify-between gap-4">
+		<div>
+			<h1 class="text-2xl font-semibold text-ink">{song.title}</h1>
+			<p class="text-muted">{song.artist} · Browse vocab</p>
+		</div>
+		{#if cameFromReader}
+			<a
+				href={`/songs/${song.id}/reader`}
+				class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-accent text-bg shadow-lg shadow-black/30 transition-transform active:scale-95"
+				aria-label="Back to reader"
+			>
+				<ArrowLeft size={24} strokeWidth={2.5} />
+			</a>
+		{/if}
 	</div>
 
 	<input
