@@ -4,56 +4,76 @@
 // +page.svelte so the scroll-tracking/state-machine logic can be reasoned
 // about (and changed) independently of the page's markup.
 //
-// Five behavior zones, driven purely by scroll position:
-//   1. top           — scrolled to the very top            -> toggle button, in the header
-//   2. top-cards     — scrolling through the first N cards -> search button, pinned to nearest of those N
-//   3. middle        — everything else                      -> search button, pinned to whichever card is nearest viewport center
-//   4. bottom-cards  — scrolling through the last N cards   -> search button, pinned to nearest of those N
-//   5. bottom        — scrolled to the true bottom          -> toggle button, below the last card
+// Search-button targeting uses one continuous formula, not a set of
+// hand-off zones: the point in the *viewport* we aim for slides linearly
+// with how far through the whole scrollable page we are. 2% scrolled aims
+// near the top of the screen; 25% aims at the screen's first quarter; 50%
+// aims at the screen's center; 98% aims near the bottom. Whichever real
+// card is nearest that point gets the button.
 //
-// Zones 2-4 all render the same way (search button on the nearest visible
-// card) — they're kept as named zones rather than collapsed into one branch
-// because "nearest card" alone breaks down at the very first/last cards:
-// there's no scroll room left to bring their centers to the viewport's
-// center, so a naive distance-to-center rule would either never pick them or
-// need an awkward cutoff that excludes them. Zones 2 and 4 remove that
-// cutoff for exactly the first/last N cards, guaranteeing every real card
-// gets the button at some point while scrolling past it.
+// An earlier version tried two separate metrics — nearest-to-viewport-edge
+// for the first/last few cards, nearest-to-viewport-center for everything
+// else — handed off at a hard boundary. That kept skipping cards right at
+// the boundary: the two metrics advance through the card list at different
+// rates (edge-anchoring only lets go of a card once it's fully scrolled
+// off-screen, which takes much longer than the moment it stops being the
+// best center match), so whichever metric was "behind" at the handoff
+// instant would jump straight past cards the other had already moved on
+// from. A single sliding target has no seam to desync across, so nothing
+// gets skipped — it's just nearest-neighbor lookup against a target that
+// happens to move.
+//
+// "top-cards" / "bottom-cards" below are the *labels* for when the natural
+// target has slid near enough to an edge that it's within the first/last N
+// cards — they don't change the math, just describe it for readability.
 const PUFF_MS = 220;
 const TOP_ZONE_COUNT = 4;
 const BOTTOM_ZONE_COUNT = 4;
-const EDGE_EPSILON = 2; // px slack for "at true top/bottom of the document" checks
+// Entering "at the top/bottom" uses a tight threshold; leaving it again needs
+// a much larger one. Without this gap, a few px of scroll jitter right at the
+// edge — momentum settling, iOS rubber-band overscroll bouncing back — flips
+// between the toggle and the last card's search button over and over, each
+// flip re-triggering the full puff-out/puff-in transition. A sticky dead
+// zone absorbs that jitter: once we've committed to the edge state, normal
+// bounce/settle noise isn't enough to kick us back out of it.
+const ENTER_EDGE_EPSILON = 4;
+const EXIT_EDGE_EPSILON = 56;
 
 export type Zone = 'top' | 'top-cards' | 'middle' | 'bottom-cards' | 'bottom';
 export type ButtonTarget = 'toggle-top' | 'toggle-bottom' | number;
 
-function isAtTop(): boolean {
-	return window.scrollY <= EDGE_EPSILON;
-}
-
-function isAtBottom(): boolean {
-	return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - EDGE_EPSILON;
+// How far through the whole scrollable page we are, as a 0..1 fraction.
+function scrollFraction(): number {
+	const maxScrollY = document.documentElement.scrollHeight - window.innerHeight;
+	if (maxScrollY <= 0) return 0;
+	return Math.min(1, Math.max(0, window.scrollY / maxScrollY));
 }
 
 // Whichever real card (rendered with a `data-line-id` + `role="button"`) has
-// its vertical center nearest the viewport's vertical center, among cards
-// that are at least partially visible. No max-distance cutoff: zones 2-4
-// need a card picked even when it's nowhere near centered.
-function nearestVisibleCardId(): number | null {
-	const viewportCenter = window.innerHeight / 2;
-	let best: number | null = null;
-	let bestDistance = Infinity;
-	document.querySelectorAll<HTMLElement>('[data-line-id][role="button"]').forEach((el) => {
-		const r = el.getBoundingClientRect();
-		if (r.bottom <= 0 || r.top >= window.innerHeight) return; // not visible at all
-		const cardCenter = (r.top + r.bottom) / 2;
-		const distance = Math.abs(cardCenter - viewportCenter);
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			best = Number(el.getAttribute('data-line-id'));
-		}
-	});
-	return best;
+// its vertical center nearest `referenceY` (a point in viewport coordinates).
+// Prefers cards fully on screen — this is what guarantees the button (which
+// sits in a corner of whichever card gets picked) never gets clipped by the
+// viewport edge — and only falls back to a partially-visible one if nothing
+// is fully visible (e.g. a single card taller than the viewport itself).
+function nearestCard(referenceY: number): number | null {
+	const els = document.querySelectorAll<HTMLElement>('[data-line-id][role="button"]');
+	for (const requireFullyVisible of [true, false]) {
+		let best: number | null = null;
+		let bestDistance = Infinity;
+		els.forEach((el) => {
+			const r = el.getBoundingClientRect();
+			const overlapsViewport = r.bottom > 0 && r.top < window.innerHeight;
+			if (!overlapsViewport) return;
+			if (requireFullyVisible && (r.top < 0 || r.bottom > window.innerHeight)) return;
+			const distance = Math.abs((r.top + r.bottom) / 2 - referenceY);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				best = Number(el.getAttribute('data-line-id'));
+			}
+		});
+		if (best !== null) return best;
+	}
+	return null;
 }
 
 export class ScrollActionButton {
@@ -70,6 +90,8 @@ export class ScrollActionButton {
 
 	#gapTimeout: ReturnType<typeof setTimeout> | null = null;
 	#ticking = false;
+	#stickyAtTop = false;
+	#stickyAtBottom = false;
 	#onScrollOrResize = () => {
 		if (this.#ticking) return;
 		this.#ticking = true;
@@ -96,24 +118,45 @@ export class ScrollActionButton {
 		}, PUFF_MS);
 	}
 
-	#classify(): { zone: Zone; target: ButtonTarget } {
-		if (isAtTop()) return { zone: 'top', target: 'toggle-top' };
-		if (isAtBottom()) return { zone: 'bottom', target: 'toggle-bottom' };
-
-		const nearest = nearestVisibleCardId();
-		if (nearest === null) return { zone: 'top', target: 'toggle-top' };
-
-		const ids = this.#lineIds();
-		const idx = ids.indexOf(nearest);
-		if (idx !== -1 && idx < TOP_ZONE_COUNT) return { zone: 'top-cards', target: nearest };
-		if (idx !== -1 && idx >= ids.length - BOTTOM_ZONE_COUNT) return { zone: 'bottom-cards', target: nearest };
-		return { zone: 'middle', target: nearest };
+	// Hysteresis wrapper around "how close to the top/bottom is scrollY":
+	// entering the edge state uses the tight threshold, leaving it again
+	// needs the much larger one, with which threshold currently applies
+	// depending on the sticky flag from the previous call.
+	#isAtTop(): boolean {
+		const threshold = this.#stickyAtTop ? EXIT_EDGE_EPSILON : ENTER_EDGE_EPSILON;
+		this.#stickyAtTop = window.scrollY <= threshold;
+		return this.#stickyAtTop;
 	}
 
-	// Being at the actual scroll ceiling/floor always wins over the nearest-card
-	// check: how tall the first/last card is (a grammar note can add a lot of
-	// height) affects exactly how much scroll room it needs, and there isn't
-	// always enough for the classification to land on 'top'/'bottom' otherwise.
+	#isAtBottom(): boolean {
+		const maxScrollY = document.documentElement.scrollHeight - window.innerHeight;
+		const threshold = this.#stickyAtBottom ? EXIT_EDGE_EPSILON : ENTER_EDGE_EPSILON;
+		this.#stickyAtBottom = window.scrollY >= maxScrollY - threshold;
+		return this.#stickyAtBottom;
+	}
+
+	#classify(): { zone: Zone; target: ButtonTarget } {
+		if (this.#isAtTop()) return { zone: 'top', target: 'toggle-top' };
+		if (this.#isAtBottom()) return { zone: 'bottom', target: 'toggle-bottom' };
+
+		const referenceY = scrollFraction() * window.innerHeight;
+		const pick = nearestCard(referenceY);
+		if (pick === null) return { zone: 'top', target: 'toggle-top' }; // safety net: nothing visible at all
+
+		const ids = this.#lineIds();
+		const idx = ids.indexOf(pick);
+		let zone: Zone = 'middle';
+		if (idx !== -1 && idx < TOP_ZONE_COUNT) zone = 'top-cards';
+		else if (idx !== -1 && idx >= ids.length - BOTTOM_ZONE_COUNT) zone = 'bottom-cards';
+
+		return { zone, target: pick };
+	}
+
+	// Being at the actual scroll ceiling/floor always wins over the sliding
+	// target check: how tall the first/last card is (a grammar note can add a
+	// lot of height) affects exactly how much scroll room it needs, and there
+	// isn't always enough for the classification to land on 'top'/'bottom'
+	// otherwise.
 	recompute() {
 		const { zone, target } = this.#classify();
 		this.zone = zone;
