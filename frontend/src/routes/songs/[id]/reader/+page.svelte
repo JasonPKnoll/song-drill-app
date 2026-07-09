@@ -84,7 +84,12 @@
 			<ReaderLineCard
 				{line}
 				revealed={revealed.has(line.id)}
-				onToggleReveal={() => toggle(line.id)}
+				onToggleReveal={() => {
+					toggle(line.id);
+					actionButton.pinToCard(line.id);
+				}}
+				onHoverStart={() => actionButton.hoverCard(line.id)}
+				onHoverEnd={() => actionButton.unhoverCard(line.id)}
 				searchHref={`/songs/${song.id}/vocab?q=${encodeURIComponent(line.text)}`}
 				showSearchButton={actionButton.displayed === line.id && !actionButton.inGap}
 			/>

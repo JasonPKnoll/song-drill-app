@@ -7,12 +7,16 @@
 		line,
 		revealed,
 		onToggleReveal,
+		onHoverStart,
+		onHoverEnd,
 		searchHref,
 		showSearchButton
 	}: {
 		line: Line;
 		revealed: boolean;
 		onToggleReveal: () => void;
+		onHoverStart: () => void;
+		onHoverEnd: () => void;
 		searchHref: string;
 		showSearchButton: boolean;
 	} = $props();
@@ -38,9 +42,13 @@
 		class="relative rounded-2xl border border-border bg-surface p-5 text-left transition hover:border-accent/50"
 		onclick={onToggleReveal}
 		onkeydown={onKeydown}
+		onmouseenter={onHoverStart}
+		onmouseleave={onHoverEnd}
+		onfocus={onHoverStart}
+		onblur={onHoverEnd}
 	>
 		{#if revealed}
-			<p class="text-xl leading-relaxed text-ink">
+			<p class="text-xl leading-relaxed text-ink" class:pr-14={showSearchButton}>
 				<Furigana furi={line.furi} />
 			</p>
 			<p class="mt-3 text-good">{line.natural}</p>
@@ -48,7 +56,7 @@
 				<p class="mt-2 text-sm text-muted">{line.grammar_note}</p>
 			{/if}
 		{:else}
-			<p class="text-xl leading-relaxed text-ink">{line.text}</p>
+			<p class="text-xl leading-relaxed text-ink" class:pr-14={showSearchButton}>{line.text}</p>
 		{/if}
 
 		{#if showSearchButton}

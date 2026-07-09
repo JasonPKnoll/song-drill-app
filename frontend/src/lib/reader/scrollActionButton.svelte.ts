@@ -26,6 +26,11 @@
 // "top-cards" / "bottom-cards" below are the *labels* for when the natural
 // target has slid near enough to an edge that it's within the first/last N
 // cards — they don't change the math, just describe it for readability.
+//
+// All of the above is the *default* targeting, used only when the user
+// hasn't directly told us where they want the button. Hovering or clicking a
+// card is a stronger, more direct signal than scroll position and overrides
+// it — see `#manualOverride()`, `hoverCard()`, `unhoverCard()`, `pinToCard()`.
 const PUFF_MS = 220;
 const TOP_ZONE_COUNT = 4;
 const BOTTOM_ZONE_COUNT = 4;
@@ -38,8 +43,14 @@ const BOTTOM_ZONE_COUNT = 4;
 // bounce/settle noise isn't enough to kick us back out of it.
 const ENTER_EDGE_EPSILON = 4;
 const EXIT_EDGE_EPSILON = 56;
+// A click pins the search button to that card, overriding the scroll-driven
+// pick entirely. It stays pinned through small scroll adjustments (settling
+// into a comfortable reading position, a stray trackpad nudge) and only lets
+// go once the user has genuinely scrolled away — measured from scrollY at
+// the moment of the click.
+const CLICK_PIN_RELEASE_THRESHOLD = 80;
 
-export type Zone = 'top' | 'top-cards' | 'middle' | 'bottom-cards' | 'bottom';
+export type Zone = 'top' | 'top-cards' | 'middle' | 'bottom-cards' | 'bottom' | 'manual';
 export type ButtonTarget = 'toggle-top' | 'toggle-bottom' | number;
 
 // How far through the whole scrollable page we are, as a 0..1 fraction.
@@ -92,6 +103,13 @@ export class ScrollActionButton {
 	#ticking = false;
 	#stickyAtTop = false;
 	#stickyAtBottom = false;
+
+	// Manual overrides, highest priority first: an actively-hovered card beats
+	// a click-pinned one, and either beats the normal scroll-driven pick.
+	#hoverId: number | null = null;
+	#clickPinId: number | null = null;
+	#clickPinBaseScrollY = 0;
+
 	#onScrollOrResize = () => {
 		if (this.#ticking) return;
 		this.#ticking = true;
@@ -135,7 +153,28 @@ export class ScrollActionButton {
 		return this.#stickyAtBottom;
 	}
 
+	// Resolves to a card id if the user has directly interacted with one
+	// (hover or a recent click), else null to defer to the normal scroll
+	// logic. Hovering wins outright while it's active. A click pin expires
+	// once scrollY has moved far enough from where it was at click-time —
+	// checked (and cleared) here so the caller never has to know the pin
+	// existed once it's stale.
+	#manualOverride(): number | null {
+		if (this.#hoverId !== null) return this.#hoverId;
+
+		if (this.#clickPinId !== null) {
+			const scrolledAway = Math.abs(window.scrollY - this.#clickPinBaseScrollY) > CLICK_PIN_RELEASE_THRESHOLD;
+			if (!scrolledAway) return this.#clickPinId;
+			this.#clickPinId = null;
+		}
+
+		return null;
+	}
+
 	#classify(): { zone: Zone; target: ButtonTarget } {
+		const manual = this.#manualOverride();
+		if (manual !== null) return { zone: 'manual', target: manual };
+
 		if (this.#isAtTop()) return { zone: 'top', target: 'toggle-top' };
 		if (this.#isAtBottom()) return { zone: 'bottom', target: 'toggle-bottom' };
 
@@ -172,6 +211,29 @@ export class ScrollActionButton {
 			window.removeEventListener('resize', this.#onScrollOrResize);
 			if (this.#gapTimeout) clearTimeout(this.#gapTimeout);
 		};
+	}
+
+	// Call on a card's mouseenter. Takes priority over everything else for as
+	// long as the pointer stays there.
+	hoverCard(id: number) {
+		this.#hoverId = id;
+		this.recompute();
+	}
+
+	// Call on a card's mouseleave. Only clears the hover if it's still the
+	// same card — guards against a stale leave arriving after the pointer has
+	// already moved to (and re-hovered) a different card.
+	unhoverCard(id: number) {
+		if (this.#hoverId === id) this.#hoverId = null;
+		this.recompute();
+	}
+
+	// Call on a card click. Pins the button there until the user scrolls far
+	// enough away (see CLICK_PIN_RELEASE_THRESHOLD) or clicks another card.
+	pinToCard(id: number) {
+		this.#clickPinId = id;
+		this.#clickPinBaseScrollY = window.scrollY;
+		this.recompute();
 	}
 }
 
