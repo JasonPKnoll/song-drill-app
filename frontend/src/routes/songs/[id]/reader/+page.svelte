@@ -55,6 +55,25 @@
 	const actionButton = createScrollActionButton(() => realLineIds);
 
 	onMount(() => actionButton.mount());
+
+	function hasSearchIcon(lineId: number): boolean {
+		return actionButton.displayed === lineId && !actionButton.inGap;
+	}
+
+	// Clicking an already-expanded card that doesn't currently have the
+	// search icon just claims the icon for it — it doesn't collapse the
+	// card. Otherwise a click always toggles reveal as normal. This means
+	// bringing the icon over to a card you're already reading takes one
+	// click, not one click-that-also-collapses-it followed by a second to
+	// reopen it.
+	function handleCardClick(lineId: number) {
+		if (revealed.has(lineId) && !hasSearchIcon(lineId)) {
+			actionButton.pinToCard(lineId);
+			return;
+		}
+		toggle(lineId);
+		actionButton.pinToCard(lineId);
+	}
 </script>
 
 {#if data.error}
@@ -84,14 +103,11 @@
 			<ReaderLineCard
 				{line}
 				revealed={revealed.has(line.id)}
-				onToggleReveal={() => {
-					toggle(line.id);
-					actionButton.pinToCard(line.id);
-				}}
+				onCardClick={() => handleCardClick(line.id)}
 				onHoverStart={() => actionButton.hoverCard(line.id)}
 				onHoverEnd={() => actionButton.unhoverCard(line.id)}
 				searchHref={`/songs/${song.id}/vocab?q=${encodeURIComponent(line.text)}`}
-				showSearchButton={actionButton.displayed === line.id && !actionButton.inGap}
+				showSearchButton={hasSearchIcon(line.id)}
 			/>
 		{/each}
 	</div>

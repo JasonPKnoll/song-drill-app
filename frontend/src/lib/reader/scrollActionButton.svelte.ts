@@ -44,11 +44,12 @@ const BOTTOM_ZONE_COUNT = 4;
 const ENTER_EDGE_EPSILON = 4;
 const EXIT_EDGE_EPSILON = 56;
 // A click pins the search button to that card, overriding the scroll-driven
-// pick entirely. It stays pinned through small scroll adjustments (settling
-// into a comfortable reading position, a stray trackpad nudge) and only lets
-// go once the user has genuinely scrolled away — measured from scrollY at
-// the moment of the click.
-const CLICK_PIN_RELEASE_THRESHOLD = 80;
+// pick entirely. It's meant to absorb accidental jitter only — a stray
+// trackpad wobble, a tap that nudges the page a couple px — not to resist
+// real scrolling. Keep this small: the moment the user actually means to
+// scroll away, they should get normal scroll-driven targeting back, not a
+// button stuck on a card they've scrolled well past.
+const CLICK_PIN_RELEASE_THRESHOLD = 20;
 
 export type Zone = 'top' | 'top-cards' | 'middle' | 'bottom-cards' | 'bottom' | 'manual';
 export type ButtonTarget = 'toggle-top' | 'toggle-bottom' | number;

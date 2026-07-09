@@ -6,7 +6,7 @@
 	let {
 		line,
 		revealed,
-		onToggleReveal,
+		onCardClick,
 		onHoverStart,
 		onHoverEnd,
 		searchHref,
@@ -14,7 +14,7 @@
 	}: {
 		line: Line;
 		revealed: boolean;
-		onToggleReveal: () => void;
+		onCardClick: () => void;
 		onHoverStart: () => void;
 		onHoverEnd: () => void;
 		searchHref: string;
@@ -24,8 +24,22 @@
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' || e.key === ' ') {
 			e.preventDefault();
-			onToggleReveal();
+			onCardClick();
 		}
+	}
+
+	// Hover-priority is a mouse-only affordance. Touch has no real "leave" —
+	// tapping a card fires a synthetic pointerenter with nothing to ever fire
+	// a matching pointerleave, which would otherwise glue the search button
+	// to that card permanently (the click-pin has a scroll-release; hover
+	// deliberately doesn't, since a real mouse leaving is a reliable signal).
+	// Filtering to pointerType === 'mouse' keeps touch taps on the click-pin
+	// path only.
+	function onPointerEnter(e: PointerEvent) {
+		if (e.pointerType === 'mouse') onHoverStart();
+	}
+	function onPointerLeave(e: PointerEvent) {
+		if (e.pointerType === 'mouse') onHoverEnd();
 	}
 </script>
 
@@ -40,12 +54,10 @@
 		role="button"
 		tabindex="0"
 		class="relative rounded-2xl border border-border bg-surface p-5 text-left transition hover:border-accent/50"
-		onclick={onToggleReveal}
+		onclick={onCardClick}
 		onkeydown={onKeydown}
-		onmouseenter={onHoverStart}
-		onmouseleave={onHoverEnd}
-		onfocus={onHoverStart}
-		onblur={onHoverEnd}
+		onpointerenter={onPointerEnter}
+		onpointerleave={onPointerLeave}
 	>
 		{#if revealed}
 			<p class="text-xl leading-relaxed text-ink" class:pr-14={showSearchButton}>
