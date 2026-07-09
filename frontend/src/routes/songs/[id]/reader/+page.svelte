@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import type { PageData } from './$types';
+	import type { PageData, Snapshot } from './$types';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import ExpandCollapseButton from '$lib/components/ExpandCollapseButton.svelte';
 	import ReaderLineCard from '$lib/components/ReaderLineCard.svelte';
@@ -9,6 +9,22 @@
 	let { data }: { data: PageData } = $props();
 
 	let revealed = $state<Set<number>>(new Set());
+
+	// Persists which lines are expanded across navigating away and back (e.g.
+	// out to the vocab page's search result and back via its "back to
+	// reader" button) — restored per SvelteKit's normal snapshot rules,
+	// which key off the actual history entry: real back/forward navigation
+	// restores it, a fresh link to this URL does not. Scroll position and
+	// which card has the search icon aren't captured here — SvelteKit
+	// restores scroll natively on back-navigation, and the scroll listener
+	// in scrollActionButton.svelte.ts re-derives the icon's card from
+	// wherever scroll ends up, so both just fall out of restoring scroll.
+	export const snapshot: Snapshot<number[]> = {
+		capture: () => [...revealed],
+		restore: (value) => {
+			revealed = new Set(value);
+		}
+	};
 
 	let realLineIds = $derived(
 		data.song ? data.song.lines.filter((l) => l.reading !== '').map((l) => l.id) : []

@@ -55,13 +55,14 @@
 			<p class="text-muted">{song.artist} · Browse vocab</p>
 		</div>
 		{#if cameFromReader}
-			<a
-				href={`/songs/${song.id}/reader`}
+			<button
+				type="button"
+				onclick={() => history.back()}
 				class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-accent text-bg shadow-lg shadow-black/30 transition-transform active:scale-95"
 				aria-label="Back to reader"
 			>
 				<ArrowLeft size={24} strokeWidth={2.5} />
-			</a>
+			</button>
 		{/if}
 	</div>
 

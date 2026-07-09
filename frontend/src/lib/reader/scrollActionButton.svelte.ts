@@ -49,7 +49,7 @@ const EXIT_EDGE_EPSILON = 56;
 // real scrolling. Keep this small: the moment the user actually means to
 // scroll away, they should get normal scroll-driven targeting back, not a
 // button stuck on a card they've scrolled well past.
-const CLICK_PIN_RELEASE_THRESHOLD = 20;
+const CLICK_PIN_RELEASE_THRESHOLD = 40;
 
 export type Zone = 'top' | 'top-cards' | 'middle' | 'bottom-cards' | 'bottom' | 'manual';
 export type ButtonTarget = 'toggle-top' | 'toggle-bottom' | number;
