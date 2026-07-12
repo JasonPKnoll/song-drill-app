@@ -77,18 +77,35 @@
 		return actionButton.displayed === lineId && !actionButton.inGap;
 	}
 
+	// Centers the clicked line in the viewport, as far as there's scroll room
+	// to do so — a card near the very top/bottom of the page just goes as far
+	// as `scrollBy` can take it, which is already the closest achievable
+	// approximation of centered. Plain (non-smooth) scroll, and deliberately
+	// run *before* `pinToCard` below: pinning records the scroll position at
+	// that moment as the pin's baseline, so centering first means the small
+	// jitter-tolerance threshold is measured from the settled, centered
+	// position — not from wherever the page happened to be pre-click, which
+	// would otherwise make this very scroll immediately look like the user
+	// scrolling away and release the pin it just set.
+	function centerOnLine(lineId: number) {
+		const el = document.querySelector<HTMLElement>(`[data-line-id="${lineId}"]`);
+		if (!el) return;
+		const rect = el.getBoundingClientRect();
+		window.scrollBy(0, rect.top + rect.height / 2 - window.innerHeight / 2);
+	}
+
 	// Clicking an already-expanded card that doesn't currently have the
 	// search icon just claims the icon for it — it doesn't collapse the
 	// card. Otherwise a click always toggles reveal as normal. This means
 	// bringing the icon over to a card you're already reading takes one
 	// click, not one click-that-also-collapses-it followed by a second to
 	// reopen it.
-	function handleCardClick(lineId: number) {
-		if (revealed.has(lineId) && !hasSearchIcon(lineId)) {
-			actionButton.pinToCard(lineId);
-			return;
-		}
-		toggle(lineId);
+	async function handleCardClick(lineId: number) {
+		const claimOnly = revealed.has(lineId) && !hasSearchIcon(lineId);
+		if (!claimOnly) toggle(lineId);
+
+		await tick(); // let a reveal/collapse's height change land before measuring
+		centerOnLine(lineId);
 		actionButton.pinToCard(lineId);
 	}
 </script>
