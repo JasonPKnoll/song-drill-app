@@ -4,8 +4,16 @@
 	import BackLink from '$lib/components/BackLink.svelte';
 	import VocabFlipCard from '$lib/components/VocabFlipCard.svelte';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
+
+	const emptyStateClass = cn(
+		'p-8',
+		'text-center',
+		'border border-border bg-surface text-muted',
+		'rounded-2xl'
+	);
 
 	// Pre-filled when arriving from the song reader's "look up this line's
 	// vocab" link (?q=<full line text>) — see the reverse-containment check
@@ -58,7 +66,12 @@
 			<button
 				type="button"
 				onclick={() => history.back()}
-				class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-accent text-bg shadow-lg shadow-black/30 transition-transform active:scale-95"
+				class={cn(
+					'flex h-12 w-12 shrink-0 items-center justify-center',
+					'bg-accent text-bg shadow-black/30',
+					'rounded-full shadow-lg',
+					'transition-transform active:scale-95'
+				)}
 				aria-label="Back to reader"
 			>
 				<ArrowLeft size={24} strokeWidth={2.5} />
@@ -70,17 +83,18 @@
 		type="text"
 		bind:value={query}
 		placeholder="Search word, reading, or meaning…"
-		class="mb-4 w-full rounded-xl border border-border bg-surface px-4 py-2 text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+		class={cn(
+			'mb-4 w-full px-4 py-2',
+			'border border-border bg-surface text-ink placeholder:text-muted',
+			'rounded-xl',
+			'focus:border-accent focus:outline-none'
+		)}
 	/>
 
 	{#if data.song.vocab.length === 0}
-		<div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
-			This song has no vocab yet.
-		</div>
+		<div class={emptyStateClass}>This song has no vocab yet.</div>
 	{:else if filtered.length === 0}
-		<div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
-			No vocab matches "{query}".
-		</div>
+		<div class={emptyStateClass}>No vocab matches "{query}".</div>
 	{:else}
 		<p class="mb-3 text-sm text-muted">{filtered.length} of {song.vocab.length} words</p>
 		<div class="grid gap-4 sm:grid-cols-2">

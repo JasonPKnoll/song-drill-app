@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Furigana from './Furigana.svelte';
 	import type { VocabItem } from '$lib/api';
+	import { cn } from '$lib/utils/cn';
 
 	let {
 		vocab,
@@ -9,17 +10,41 @@
 	}: { vocab: VocabItem; flipped: boolean; onToggle: () => void } = $props();
 </script>
 
-<button type="button" class="flip-card h-64 w-full text-left" onclick={onToggle} aria-pressed={flipped}>
+<button
+	type="button"
+	class={cn('flip-card', 'h-64 w-full', 'text-left')}
+	onclick={onToggle}
+	aria-pressed={flipped}
+>
 	<div class="flip-card-inner" class:flipped>
 		<div
-			class="flip-card-face flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-surface p-6 text-center"
+			class={cn(
+				'flip-card-face flex flex-col items-center justify-center gap-3 p-6',
+				'text-center',
+				'border border-border bg-surface',
+				'rounded-2xl'
+			)}
 		>
-			<span class="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">{vocab.pos}</span>
+			<span
+				class={cn(
+					'px-2 py-0.5',
+					'text-xs font-medium',
+					'bg-accent/10 text-accent',
+					'rounded-full'
+				)}
+			>
+				{vocab.pos}
+			</span>
 			<p class="text-4xl font-semibold text-ink">{vocab.surface}</p>
 			<p class="text-sm text-muted">Tap to reveal</p>
 		</div>
 		<div
-			class="flip-card-face flip-card-back flex flex-col items-center justify-center gap-3 overflow-y-auto rounded-2xl border border-border bg-surface p-6 text-center"
+			class={cn(
+				'flip-card-face flip-card-back flex flex-col items-center justify-center gap-3 overflow-y-auto p-6',
+				'text-center',
+				'border border-border bg-surface',
+				'rounded-2xl'
+			)}
 		>
 			<p class="text-2xl text-ink">
 				<Furigana furi={vocab.furi} />

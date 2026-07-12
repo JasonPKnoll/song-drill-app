@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let {
 		front,
@@ -16,10 +17,21 @@
 	let revealed = $state(false);
 </script>
 
-<div class="rounded-2xl border border-border bg-surface p-8 shadow-lg">
+<div
+	class={cn(
+		'p-8',
+		'border border-border',
+		'bg-surface',
+		'rounded-2xl shadow-lg'
+	)}
+>
 	<button
 		type="button"
-		class="flex min-h-48 w-full flex-col items-center justify-center gap-4 text-center disabled:cursor-default"
+		class={cn(
+			'flex min-h-48 w-full flex-col items-center justify-center gap-4',
+			'text-center',
+			'disabled:cursor-default'
+		)}
 		onclick={() => (revealed = true)}
 		disabled={revealed}
 	>
@@ -27,21 +39,31 @@
 	</button>
 
 	{#if revealed}
-		<div class="mt-6 border-t border-border pt-6">
+		<div class={cn('mt-6 pt-6', 'border-t border-border')}>
 			{@render back()}
 		</div>
 
 		<div class="mt-6 flex gap-3">
 			<button
 				type="button"
-				class="flex-1 rounded-xl border border-bad bg-bad/10 py-3 font-medium text-bad transition hover:bg-bad/20"
+				class={cn(
+					'flex-1 py-3',
+					'font-medium',
+					'border border-bad bg-bad/10 text-bad',
+					'rounded-xl transition hover:bg-bad/20'
+				)}
 				onclick={onMissed}
 			>
 				Missed
 			</button>
 			<button
 				type="button"
-				class="flex-1 rounded-xl border border-good bg-good/10 py-3 font-medium text-good transition hover:bg-good/20"
+				class={cn(
+					'flex-1 py-3',
+					'font-medium',
+					'border border-good bg-good/10 text-good',
+					'rounded-xl transition hover:bg-good/20'
+				)}
 				onclick={onGotIt}
 			>
 				Got it

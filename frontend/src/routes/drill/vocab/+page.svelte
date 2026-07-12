@@ -4,6 +4,7 @@
 	import DrillCard from '$lib/components/DrillCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
 
@@ -44,7 +45,14 @@
 {#if data.error}
 	<p class="text-bad">{data.error}</p>
 {:else if !current}
-	<div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
+	<div
+		class={cn(
+			'p-8',
+			'text-center',
+			'border border-border bg-surface text-muted',
+			'rounded-2xl'
+		)}
+	>
 		Nothing due right now. Nice work.
 	</div>
 {:else}

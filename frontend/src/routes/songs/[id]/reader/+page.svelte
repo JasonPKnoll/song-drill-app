@@ -5,6 +5,7 @@
 	import ExpandCollapseButton from '$lib/components/ExpandCollapseButton.svelte';
 	import ReaderLineCard from '$lib/components/ReaderLineCard.svelte';
 	import { createScrollActionButton } from '$lib/reader/scrollActionButton.svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
 
@@ -112,7 +113,14 @@
 		{#each song.lines as line, i (line.id)}
 			{@const prevSection = i > 0 ? song.lines[i - 1].section : undefined}
 			{#if line.section && line.section !== prevSection}
-				<h2 class="mt-4 mb-1 text-sm font-semibold tracking-wide text-accent uppercase first:mt-0">
+				<h2
+					class={cn(
+						'mt-4 mb-1',
+						'text-sm font-semibold tracking-wide uppercase',
+						'text-accent',
+						'first:mt-0'
+					)}
+				>
 					{line.section}
 				</h2>
 			{/if}

@@ -2,6 +2,7 @@
 	import type { Line } from '$lib/api';
 	import Furigana from './Furigana.svelte';
 	import LineSearchButton from './LineSearchButton.svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let {
 		line,
@@ -45,7 +46,15 @@
 
 {#if line.reading === ''}
 	<!-- Junk line (section headers, ad-libs, etc. with no reading annotation) — not interactive. -->
-	<div data-line-id={line.id} class="rounded-2xl border border-border bg-surface/50 p-5 text-left text-muted italic">
+	<div
+		data-line-id={line.id}
+		class={cn(
+			'p-5',
+			'text-left italic',
+			'border border-border bg-surface/50 text-muted',
+			'rounded-2xl'
+		)}
+	>
 		{line.text}
 	</div>
 {:else}
@@ -53,14 +62,19 @@
 		data-line-id={line.id}
 		role="button"
 		tabindex="0"
-		class="relative rounded-2xl border border-border bg-surface p-5 text-left transition hover:border-accent/50"
+		class={cn(
+			'relative p-5',
+			'text-left',
+			'border border-border bg-surface',
+			'rounded-2xl transition hover:border-accent/50'
+		)}
 		onclick={onCardClick}
 		onkeydown={onKeydown}
 		onpointerenter={onPointerEnter}
 		onpointerleave={onPointerLeave}
 	>
 		{#if revealed}
-			<p class="text-xl leading-relaxed text-ink" class:pr-14={showSearchButton}>
+			<p class={cn('text-xl leading-relaxed', 'text-ink', { 'pr-14': showSearchButton })}>
 				<Furigana furi={line.furi} />
 			</p>
 			<p class="mt-3 text-good">{line.natural}</p>
@@ -68,7 +82,7 @@
 				<p class="mt-2 text-sm text-muted">{line.grammar_note}</p>
 			{/if}
 		{:else}
-			<p class="text-xl leading-relaxed text-ink" class:pr-14={showSearchButton}>{line.text}</p>
+			<p class={cn('text-xl leading-relaxed', 'text-ink', { 'pr-14': showSearchButton })}>{line.text}</p>
 		{/if}
 
 		{#if showSearchButton}

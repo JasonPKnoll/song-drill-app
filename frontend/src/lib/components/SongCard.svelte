@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { SongSummary } from '$lib/api';
+	import { cn } from '$lib/utils/cn';
 
 	let { song }: { song: SongSummary } = $props();
 
@@ -8,7 +9,11 @@
 
 <a
 	href={`/songs/${song.id}`}
-	class="block rounded-2xl border border-border bg-surface p-5 transition hover:border-accent/50"
+	class={cn(
+		'block p-5',
+		'border border-border bg-surface',
+		'rounded-2xl transition hover:border-accent/50'
+	)}
 >
 	<div class="flex items-start justify-between gap-4">
 		<div>
@@ -16,7 +21,14 @@
 			<p class="text-sm text-muted">{song.artist}</p>
 		</div>
 		{#if fullyMastered}
-			<span class="whitespace-nowrap rounded-full bg-mastered/10 px-2 py-1 text-xs font-medium text-mastered">
+			<span
+				class={cn(
+					'px-2 py-1',
+					'text-xs font-medium whitespace-nowrap',
+					'bg-mastered/10 text-mastered',
+					'rounded-full'
+				)}
+			>
 				Mastered
 			</span>
 		{/if}

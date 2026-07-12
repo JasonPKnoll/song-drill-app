@@ -1,26 +1,24 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import SongCard from '$lib/components/SongCard.svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
+
+	const drillLinkClass = cn(
+		'px-4 py-2',
+		'text-sm font-medium',
+		'border border-accent/50 bg-accent/10 text-accent',
+		'rounded-xl transition hover:bg-accent/20'
+	);
 </script>
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Song Library</h1>
 	{#if data.songs.length > 0}
 		<div class="flex gap-2">
-			<a
-				href="/drill/vocab"
-				class="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/20"
-			>
-				Drill all vocab
-			</a>
-			<a
-				href="/drill/lines"
-				class="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/20"
-			>
-				Drill all lines
-			</a>
+			<a href="/drill/vocab" class={drillLinkClass}>Drill all vocab</a>
+			<a href="/drill/lines" class={drillLinkClass}>Drill all lines</a>
 		</div>
 	{/if}
 </div>
@@ -28,7 +26,14 @@
 {#if data.error}
 	<p class="text-bad">Failed to load songs: {data.error}</p>
 {:else if data.songs.length === 0}
-	<div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
+	<div
+		class={cn(
+			'p-8',
+			'text-center',
+			'border border-border bg-surface text-muted',
+			'rounded-2xl'
+		)}
+	>
 		No songs ingested yet. Run <code class="text-accent">lyrics-annotator</code> and POST the
 		output to <code class="text-accent">/api/song-drill/songs/ingest</code>.
 	</div>

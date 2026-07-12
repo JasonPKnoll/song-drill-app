@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
+	import { cn } from '$lib/utils/cn';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -59,7 +60,12 @@
 	});
 </script>
 
-<div class="min-h-screen bg-bg">
+<div
+	class={cn(
+		'min-h-screen',
+		'bg-bg'
+	)}
+>
 	<header class="border-b border-border">
 		<div class="mx-auto max-w-3xl px-4 py-4">
 			<a href="/" class="wordmark" aria-label="Kotodama" bind:this={wordmarkEl}>
