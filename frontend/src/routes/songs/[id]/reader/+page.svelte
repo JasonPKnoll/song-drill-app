@@ -147,7 +147,7 @@
 				onCardClick={() => handleCardClick(line.id)}
 				onHoverStart={() => actionButton.hoverCard(line.id)}
 				onHoverEnd={() => actionButton.unhoverCard(line.id)}
-				searchHref={`/songs/${song.id}/vocab?q=${encodeURIComponent(line.text)}`}
+				searchHref={`/songs/${song.id}/vocab?line=${line.id}`}
 				showSearchButton={hasSearchIcon(line.id)}
 			/>
 		{/each}

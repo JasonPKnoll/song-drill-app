@@ -41,6 +41,10 @@ export interface VocabItem {
 	base_meaning: string;
 	context_meaning: string;
 	first_line_position: number;
+	// Every line this word actually occurs in (from real tokenization at
+	// ingest time) — the exact way to answer "is this word in line X,"
+	// rather than guessing via substring matching on the line's raw text.
+	line_ids: number[];
 }
 
 export interface SongDetail extends Song {

@@ -80,14 +80,15 @@ type Line struct {
 }
 
 type VocabItem struct {
-	ID                int64  `json:"id"`
-	Surface           string `json:"surface"`
-	Reading           string `json:"reading"`
-	Furi              string `json:"furi"`
-	POS               string `json:"pos"`
-	BaseMeaning       string `json:"base_meaning"`
-	ContextMeaning    string `json:"context_meaning"`
-	FirstLinePosition int    `json:"first_line_position"`
+	ID                int64   `json:"id"`
+	Surface           string  `json:"surface"`
+	Reading           string  `json:"reading"`
+	Furi              string  `json:"furi"`
+	POS               string  `json:"pos"`
+	BaseMeaning       string  `json:"base_meaning"`
+	ContextMeaning    string  `json:"context_meaning"`
+	FirstLinePosition int     `json:"first_line_position"`
+	LineIDs           []int64 `json:"line_ids"` // every line this word actually occurs in, from line_words (real tokenization, not text guessing)
 }
 
 type SongDetail struct {

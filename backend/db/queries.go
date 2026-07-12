@@ -161,6 +161,34 @@ func GetSong(database *sql.DB, id int64) (*SongDetail, error) {
 		return nil, err
 	}
 
+	// Real per-line word occurrences, from line_words (populated at ingest
+	// time from lyrics-annotator's own tokenization) — the exact answer to
+	// "which lines does this word actually appear in," as opposed to
+	// guessing from raw sentence text, which false-positives whenever a
+	// short word is a substring of a longer word that's actually what's
+	// present (e.g. 人 inside 二人).
+	lineIDsByVocab := make(map[int64][]int64)
+	lineWordRows, err := database.Query(`
+		SELECT DISTINCT lw.vocab_id, lw.line_id
+		FROM line_words lw
+		JOIN lines l ON l.id = lw.line_id
+		WHERE l.song_id = ?
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer lineWordRows.Close()
+	for lineWordRows.Next() {
+		var vocabID, lineID int64
+		if err := lineWordRows.Scan(&vocabID, &lineID); err != nil {
+			return nil, err
+		}
+		lineIDsByVocab[vocabID] = append(lineIDsByVocab[vocabID], lineID)
+	}
+	if err := lineWordRows.Err(); err != nil {
+		return nil, err
+	}
+
 	vocabRows, err := database.Query(`
 		SELECT v.id, v.surface, v.reading, v.furi, v.pos, v.base_meaning, sv.context_meaning, sv.first_line_position
 		FROM song_vocab sv
@@ -178,6 +206,10 @@ func GetSong(database *sql.DB, id int64) (*SongDetail, error) {
 		var v VocabItem
 		if err := vocabRows.Scan(&v.ID, &v.Surface, &v.Reading, &v.Furi, &v.POS, &v.BaseMeaning, &v.ContextMeaning, &v.FirstLinePosition); err != nil {
 			return nil, err
+		}
+		v.LineIDs = lineIDsByVocab[v.ID]
+		if v.LineIDs == nil {
+			v.LineIDs = []int64{}
 		}
 		vocab = append(vocab, v)
 	}
