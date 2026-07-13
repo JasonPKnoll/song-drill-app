@@ -21,6 +21,101 @@ func parseDue(s string) (time.Time, error) {
 	return time.ParseInLocation(sqliteDatetimeLayout, s, time.UTC)
 }
 
+// ListUsers returns every profile, oldest first.
+func ListUsers(database *sql.DB) ([]User, error) {
+	rows, err := database.Query(`SELECT id, display_name, color, created_at FROM users ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.DisplayName, &u.Color, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// GetUser returns nil, nil if id doesn't match any profile.
+func GetUser(database *sql.DB, id int64) (*User, error) {
+	var u User
+	err := database.QueryRow(
+		`SELECT id, display_name, color, created_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.DisplayName, &u.Color, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CreateUser adds a new profile.
+func CreateUser(database *sql.DB, displayName, color string) (*User, error) {
+	res, err := database.Exec(
+		`INSERT INTO users (display_name, color) VALUES (?, ?)`, displayName, color,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return GetUser(database, id)
+}
+
+// UpdateUser renames/recolors a profile. Returns false if id doesn't match any profile.
+func UpdateUser(database *sql.DB, id int64, displayName, color string) (bool, error) {
+	res, err := database.Exec(
+		`UPDATE users SET display_name = ?, color = ? WHERE id = ?`, displayName, color, id,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// DeleteUser removes a profile and (via ON DELETE CASCADE) its progress.
+// Refuses to delete the last remaining profile — the app always needs at
+// least one to fall back to. Returns false if id doesn't match any profile.
+func DeleteUser(database *sql.DB, id int64) (bool, error) {
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+		return false, err
+	}
+	if count <= 1 {
+		return false, fmt.Errorf("cannot delete the last remaining profile")
+	}
+	res, err := database.Exec(`DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// FirstUserID returns the earliest-created profile's id — the fallback
+// "active profile" when no cookie names one, or it names one that's since
+// been deleted. migrate() guarantees at least one profile always exists.
+func FirstUserID(database *sql.DB) (int64, error) {
+	var id int64
+	err := database.QueryRow(`SELECT id FROM users ORDER BY id ASC LIMIT 1`).Scan(&id)
+	return id, err
+}
+
 // IngestSong writes a full song payload into the database inside a single
 // transaction, following the ingest logic in song_drill_schema.md.
 func IngestSong(database *sql.DB, payload IngestPayload) (int64, error) {
@@ -107,17 +202,18 @@ func IngestSong(database *sql.DB, payload IngestPayload) (int64, error) {
 	return songID, nil
 }
 
-// ListSongs returns every song with aggregate progress stats for the library home screen.
-func ListSongs(database *sql.DB) ([]SongSummary, error) {
+// ListSongs returns every song with aggregate progress stats for the library
+// home screen, scoped to the given profile's mastered-count.
+func ListSongs(database *sql.DB, userID int64) ([]SongSummary, error) {
 	rows, err := database.Query(`
 		SELECT
 			s.id, s.title, s.artist, s.language, s.notes, s.created_at,
 			(SELECT COUNT(*) FROM song_vocab sv WHERE sv.song_id = s.id) AS vocab_count,
-			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.state = 'review' AND vp.interval_days >= ?) AS mastered_count,
+			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.user_id = ? AND vp.state = 'review' AND vp.interval_days >= ?) AS mastered_count,
 			(SELECT COUNT(*) FROM lines l WHERE l.song_id = s.id) AS line_count
 		FROM songs s
 		ORDER BY s.created_at DESC, s.id DESC
-	`, srs.MasteredIntervalDays)
+	`, userID, srs.MasteredIntervalDays)
 	if err != nil {
 		return nil, err
 	}
@@ -264,8 +360,9 @@ func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 }
 
 // VocabDrillQueue returns due vocab cards (or all-time-new cards with no progress
-// row yet), earliest due first. If songID is nil, pulls across all songs.
-func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, error) {
+// row yet) for the given profile, earliest due first. If songID is nil, pulls
+// across all songs.
+func VocabDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) ([]VocabCard, error) {
 	query := `
 		SELECT
 			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, v.base_meaning,
@@ -275,10 +372,10 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 		JOIN vocab v ON v.id = sv.vocab_id
 		JOIN songs s ON s.id = sv.song_id
 		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
-		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
+		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE (vp.due IS NULL OR vp.due <= datetime('now'))
 	`
-	args := []any{}
+	args := []any{userID}
 	if songID != nil {
 		query += " AND sv.song_id = ?"
 		args = append(args, *songID)
@@ -326,20 +423,21 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 	return cards, rows.Err()
 }
 
-// LineDrillQueue returns due line cards, earliest due first. Content-less lines
-// (e.g. scraped page noise with no reading/translation) are excluded — there's
-// nothing to quiz — even though they're still ingested and shown in the reader.
-func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, error) {
+// LineDrillQueue returns due line cards for the given profile, earliest due
+// first. Content-less lines (e.g. scraped page noise with no
+// reading/translation) are excluded — there's nothing to quiz — even though
+// they're still ingested and shown in the reader.
+func LineDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) ([]LineCard, error) {
 	query := `
 		SELECT l.id, l.song_id, s.title, l.text, l.furi, l.natural, l.grammar_note,
 			COALESCE(lp.state, 'new'), COALESCE(lp.due, datetime('now'))
 		FROM lines l
 		JOIN songs s ON s.id = l.song_id
-		LEFT JOIN line_progress lp ON lp.line_id = l.id
+		LEFT JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
 		WHERE l.reading != ''
 		AND (lp.due IS NULL OR lp.due <= datetime('now'))
 	`
-	args := []any{}
+	args := []any{userID}
 	if songID != nil {
 		query += " AND l.song_id = ?"
 		args = append(args, *songID)
@@ -368,19 +466,19 @@ func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, err
 	return cards, rows.Err()
 }
 
-// RecordVocabResult upserts vocab_progress for (songID, vocabID), loading its
-// current srs.State (or a fresh one, if this card has never been seen),
-// applying the grade, and persisting the result. Returns the resulting
-// state so the caller can tell whether this card still needs same-day
-// repetition (learning/relearning) or is done for now (review).
-func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) (srs.State, error) {
+// RecordVocabResult upserts vocab_progress for (userID, songID, vocabID),
+// loading its current srs.State (or a fresh one, if this profile has never
+// seen this card), applying the grade, and persisting the result. Returns
+// the resulting state so the caller can tell whether this card still needs
+// same-day repetition (learning/relearning) or is done for now (review).
+func RecordVocabResult(database *sql.DB, userID, songID, vocabID int64, correct bool) (srs.State, error) {
 	now := time.Now()
 	current := srs.New(now)
 
 	var stage, due string
 	err := database.QueryRow(
-		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`,
-		songID, vocabID,
+		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
+		userID, songID, vocabID,
 	).Scan(&stage, &current.StepIndex, &current.EaseFactor, &current.IntervalDays, &current.Lapses, &due)
 	switch {
 	case err == sql.ErrNoRows:
@@ -401,9 +499,9 @@ func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) (s
 	}
 
 	_, err = database.Exec(`
-		INSERT INTO vocab_progress (song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-		ON CONFLICT(song_id, vocab_id) DO UPDATE SET
+		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+		ON CONFLICT(user_id, song_id, vocab_id) DO UPDATE SET
 			state = excluded.state,
 			step_index = excluded.step_index,
 			ease_factor = excluded.ease_factor,
@@ -413,7 +511,7 @@ func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) (s
 			correct = vocab_progress.correct + ?,
 			due = excluded.due,
 			last_seen = excluded.last_seen
-	`, songID, vocabID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
+	`, userID, songID, vocabID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
 		correctInc, formatDue(next.Due), formatDue(now), correctInc)
 	if err != nil {
 		return srs.State{}, err
@@ -421,15 +519,15 @@ func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) (s
 	return next, nil
 }
 
-// RecordLineResult upserts line_progress for lineID, same shape as RecordVocabResult.
-func RecordLineResult(database *sql.DB, lineID int64, correct bool) (srs.State, error) {
+// RecordLineResult upserts line_progress for (userID, lineID), same shape as RecordVocabResult.
+func RecordLineResult(database *sql.DB, userID, lineID int64, correct bool) (srs.State, error) {
 	now := time.Now()
 	current := srs.New(now)
 
 	var stage, due string
 	err := database.QueryRow(
-		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM line_progress WHERE line_id = ?`,
-		lineID,
+		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM line_progress WHERE user_id = ? AND line_id = ?`,
+		userID, lineID,
 	).Scan(&stage, &current.StepIndex, &current.EaseFactor, &current.IntervalDays, &current.Lapses, &due)
 	switch {
 	case err == sql.ErrNoRows:
@@ -450,9 +548,9 @@ func RecordLineResult(database *sql.DB, lineID int64, correct bool) (srs.State, 
 	}
 
 	_, err = database.Exec(`
-		INSERT INTO line_progress (line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-		ON CONFLICT(line_id) DO UPDATE SET
+		INSERT INTO line_progress (user_id, line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+		ON CONFLICT(user_id, line_id) DO UPDATE SET
 			state = excluded.state,
 			step_index = excluded.step_index,
 			ease_factor = excluded.ease_factor,
@@ -462,7 +560,7 @@ func RecordLineResult(database *sql.DB, lineID int64, correct bool) (srs.State, 
 			correct = line_progress.correct + ?,
 			due = excluded.due,
 			last_seen = excluded.last_seen
-	`, lineID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
+	`, userID, lineID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
 		correctInc, formatDue(next.Due), formatDue(now), correctInc)
 	if err != nil {
 		return srs.State{}, err
@@ -470,8 +568,9 @@ func RecordLineResult(database *sql.DB, lineID int64, correct bool) (srs.State, 
 	return next, nil
 }
 
-// GetStats returns overall progress stats across every song.
-func GetStats(database *sql.DB) (*Stats, error) {
+// GetStats returns overall progress stats across every song, scoped to the
+// given profile (song/line counts stay global — only progress is per-profile).
+func GetStats(database *sql.DB, userID int64) (*Stats, error) {
 	var st Stats
 	if err := database.QueryRow(`SELECT COUNT(*) FROM songs`).Scan(&st.TotalSongs); err != nil {
 		return nil, err
@@ -479,27 +578,27 @@ func GetStats(database *sql.DB) (*Stats, error) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM song_vocab`).Scan(&st.TotalVocab); err != nil {
 		return nil, err
 	}
-	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE state = 'review' AND interval_days >= ?`, srs.MasteredIntervalDays).Scan(&st.MasteredVocab); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND state = 'review' AND interval_days >= ?`, userID, srs.MasteredIntervalDays).Scan(&st.MasteredVocab); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM lines`).Scan(&st.TotalLines); err != nil {
 		return nil, err
 	}
-	if err := database.QueryRow(`SELECT COUNT(*) FROM line_progress WHERE state = 'review' AND interval_days >= ?`, srs.MasteredIntervalDays).Scan(&st.MasteredLines); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM line_progress WHERE user_id = ? AND state = 'review' AND interval_days >= ?`, userID, srs.MasteredIntervalDays).Scan(&st.MasteredLines); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`
 		SELECT COUNT(*) FROM song_vocab sv
-		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
+		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE vp.due IS NULL OR vp.due <= datetime('now')
-	`).Scan(&st.VocabDueToday); err != nil {
+	`, userID).Scan(&st.VocabDueToday); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`
 		SELECT COUNT(*) FROM lines l
-		LEFT JOIN line_progress lp ON lp.line_id = l.id
+		LEFT JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
 		WHERE lp.due IS NULL OR lp.due <= datetime('now')
-	`).Scan(&st.LinesDueToday); err != nil {
+	`, userID).Scan(&st.LinesDueToday); err != nil {
 		return nil, err
 	}
 	return &st, nil

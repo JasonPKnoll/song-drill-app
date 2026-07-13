@@ -33,7 +33,7 @@ func (e *Env) IngestSong(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/song-drill/songs
 func (e *Env) ListSongs(w http.ResponseWriter, r *http.Request) {
-	songs, err := db.ListSongs(e.DB)
+	songs, err := db.ListSongs(e.DB, userIDFromContext(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -49,6 +49,15 @@ type IngestVocabRow struct {
 
 // --- API response types ---
 
+// User is a profile — see the Profiles section of song_drill_schema.md.
+// No password: picked via a plain cookie, since the app is Tailscale-only.
+type User struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"display_name"`
+	Color       string `json:"color"`
+	CreatedAt   string `json:"created_at"`
+}
+
 type Song struct {
 	ID        int64   `json:"id"`
 	Title     string  `json:"title"`

@@ -166,3 +166,43 @@ export function recordLineResult(lineId: number, correct: boolean): Promise<Dril
 export function getStats(): Promise<Stats> {
 	return request('/stats');
 }
+
+// Profile — no password, just a name/color someone picks. See the Profiles
+// section of song_drill_schema.md: the app is Tailscale-only, so this just
+// partitions progress/stats between people sharing the install.
+export interface Profile {
+	id: number;
+	display_name: string;
+	color: string;
+	created_at: string;
+}
+
+export function listProfiles(fetchFn?: typeof fetch): Promise<Profile[]> {
+	return request('/profiles', undefined, fetchFn);
+}
+
+export function getActiveProfile(fetchFn?: typeof fetch): Promise<Profile> {
+	return request('/profiles/active', undefined, fetchFn);
+}
+
+export function setActiveProfile(id: number): Promise<Profile> {
+	return request('/profiles/active', { method: 'POST', body: JSON.stringify({ id }) });
+}
+
+export function createProfile(displayName: string, color: string): Promise<Profile> {
+	return request('/profiles', {
+		method: 'POST',
+		body: JSON.stringify({ display_name: displayName, color })
+	});
+}
+
+export function renameProfile(id: number, displayName: string, color: string): Promise<Profile> {
+	return request(`/profiles/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ display_name: displayName, color })
+	});
+}
+
+export function deleteProfile(id: number): Promise<void> {
+	return request(`/profiles/${id}`, { method: 'DELETE' });
+}

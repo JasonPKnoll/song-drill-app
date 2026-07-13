@@ -61,6 +61,21 @@ func migrate(database *sql.DB) error {
 		return fmt.Errorf("recreate dropped tables: %w", err)
 	}
 
+	defaultUserID, err := ensureDefaultUser(database)
+	if err != nil {
+		return fmt.Errorf("ensure default profile: %w", err)
+	}
+	if err := migrateProgressTableToProfiles(database, "vocab_progress",
+		"song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen",
+		defaultUserID); err != nil {
+		return err
+	}
+	if err := migrateProgressTableToProfiles(database, "line_progress",
+		"line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen",
+		defaultUserID); err != nil {
+		return err
+	}
+
 	columnMigrations := []struct {
 		table  string
 		column string
@@ -80,6 +95,63 @@ func migrate(database *sql.DB) error {
 		if _, err := database.Exec(m.ddl); err != nil {
 			return fmt.Errorf("add %s.%s: %w", m.table, m.column, err)
 		}
+	}
+	return nil
+}
+
+// ensureDefaultUser guarantees at least one profile exists, returning its
+// id — used both as the fallback "active profile" when no cookie names one,
+// and here to backfill any pre-profiles progress rows found below.
+func ensureDefaultUser(database *sql.DB) (int64, error) {
+	var id int64
+	err := database.QueryRow(`SELECT id FROM users ORDER BY id ASC LIMIT 1`).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+	res, err := database.Exec(`INSERT INTO users (display_name) VALUES (?)`, "Player 1")
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// migrateProgressTableToProfiles adds user_id to a pre-profiles
+// vocab_progress/line_progress table. SQLite can't add a table-level UNIQUE
+// constraint via ALTER TABLE, and the old constraint (song_id/vocab_id, or
+// line_id alone) is no longer correct once more than one profile exists — so
+// this rebuilds the table: rename the existing one aside, let schema.sql
+// create the new (profile-scoped) shape, copy every row across tagged with
+// defaultUserID, then drop the old table. Unlike the state-column migration
+// above, this is real progress history (not disposable test data), so it
+// must be preserved, not dropped.
+func migrateProgressTableToProfiles(database *sql.DB, table, sharedColumns string, defaultUserID int64) error {
+	hasUserID, err := hasColumn(database, table, "user_id")
+	if err != nil {
+		return fmt.Errorf("check %s.user_id: %w", table, err)
+	}
+	if hasUserID {
+		return nil
+	}
+
+	oldTable := table + "_pre_profiles"
+	if _, err := database.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, table, oldTable)); err != nil {
+		return fmt.Errorf("rename %s for profile migration: %w", table, err)
+	}
+	if _, err := database.Exec(schemaSQL); err != nil {
+		return fmt.Errorf("recreate %s with profile support: %w", table, err)
+	}
+	copySQL := fmt.Sprintf(
+		`INSERT INTO %s (user_id, %s) SELECT ?, %s FROM %s`,
+		table, sharedColumns, sharedColumns, oldTable,
+	)
+	if _, err := database.Exec(copySQL, defaultUserID); err != nil {
+		return fmt.Errorf("copy %s rows to profile-scoped table: %w", table, err)
+	}
+	if _, err := database.Exec(fmt.Sprintf(`DROP TABLE %s`, oldTable)); err != nil {
+		return fmt.Errorf("drop %s: %w", oldTable, err)
 	}
 	return nil
 }

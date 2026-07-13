@@ -24,7 +24,7 @@ func (e *Env) VocabDrillQueue(w http.ResponseWriter, r *http.Request) {
 		songIDPtr = &songID
 	}
 
-	cards, err := db.VocabDrillQueue(e.DB, songIDPtr, limit)
+	cards, err := db.VocabDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -46,7 +46,7 @@ func (e *Env) LineDrillQueue(w http.ResponseWriter, r *http.Request) {
 		songIDPtr = &songID
 	}
 
-	cards, err := db.LineDrillQueue(e.DB, songIDPtr, limit)
+	cards, err := db.LineDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -62,6 +62,8 @@ func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := userIDFromContext(r.Context())
+
 	var state string
 	switch req.Type {
 	case "vocab":
@@ -69,7 +71,7 @@ func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "song_id and vocab_id are required for type=vocab")
 			return
 		}
-		next, err := db.RecordVocabResult(e.DB, *req.SongID, *req.VocabID, req.Correct)
+		next, err := db.RecordVocabResult(e.DB, userID, *req.SongID, *req.VocabID, req.Correct)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -80,7 +82,7 @@ func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "line_id is required for type=line")
 			return
 		}
-		next, err := db.RecordLineResult(e.DB, *req.LineID, req.Correct)
+		next, err := db.RecordLineResult(e.DB, userID, *req.LineID, req.Correct)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

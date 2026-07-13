@@ -8,7 +8,7 @@ import (
 
 // GET /api/song-drill/stats
 func (e *Env) GetStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := db.GetStats(e.DB)
+	stats, err := db.GetStats(e.DB, userIDFromContext(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

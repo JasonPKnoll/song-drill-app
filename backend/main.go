@@ -37,12 +37,14 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type"},
 		AllowCredentials: false,
 	}))
 
 	r.Route("/api/song-drill", func(r chi.Router) {
+		r.Use(env.WithActiveUser)
+
 		r.Route("/songs", func(r chi.Router) {
 			r.Post("/ingest", env.IngestSong)
 			r.Get("/", env.ListSongs)
@@ -56,6 +58,14 @@ func main() {
 			r.Post("/result", env.RecordDrillResult)
 		})
 		r.Get("/stats", env.GetStats)
+		r.Route("/profiles", func(r chi.Router) {
+			r.Get("/", env.ListProfiles)
+			r.Post("/", env.CreateProfile)
+			r.Get("/active", env.GetActiveProfile)
+			r.Post("/active", env.SetActiveProfile)
+			r.Patch("/{id}", env.UpdateProfile)
+			r.Delete("/{id}", env.DeleteProfile)
+		})
 	})
 
 	log.Printf("song-drill API listening on %s (db: %s)", addr, dbPath)

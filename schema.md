@@ -94,6 +94,17 @@ One file per song.
 Use this exactly. Do not modify column names or constraints.
 
 ```sql
+-- User profiles. No authentication — the app is Tailscale-only (network
+-- access is already gated), so this just partitions progress/stats between
+-- people sharing the same install. Selected via a plain cookie, not a
+-- password — see the Profiles section below.
+CREATE TABLE users (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    color        TEXT NOT NULL DEFAULT '#a78bfa',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Songs
 CREATE TABLE songs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,6 +164,7 @@ CREATE TABLE line_words (
 -- review, with relearning on a lapse from review) — see backend/srs/srs.go.
 CREATE TABLE vocab_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
     vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
     state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
@@ -164,12 +176,13 @@ CREATE TABLE vocab_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
     last_seen     TEXT,
-    UNIQUE(song_id, vocab_id)               -- progress is per song, not global
+    UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
 );
 
 -- SRS progress for line cards (same state machine as vocab_progress).
 CREATE TABLE line_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     line_id       INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
     state         TEXT NOT NULL DEFAULT 'new',
     step_index    INTEGER NOT NULL DEFAULT 0,
@@ -180,7 +193,7 @@ CREATE TABLE line_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen     TEXT,
-    UNIQUE(line_id)
+    UNIQUE(user_id, line_id)
 );
 ```
 
@@ -222,6 +235,23 @@ in the `review` stage with `interval_days >= 30`.
 
 ---
 
+## Profiles
+
+No authentication. The app is Tailscale-only, so network access is already
+gated — profiles just let more than one person share an install and keep
+separate SRS progress/stats, picked via a plain, unsigned `song_drill_user`
+cookie (see `backend/handlers/profiles.go`), not a password.
+
+- Songs/vocab/lines are global, shared content — only `vocab_progress` and
+  `line_progress` are scoped per profile.
+- Middleware resolves the active profile from the cookie on every request,
+  falling back to the earliest-created profile if the cookie is missing or
+  names a profile that's since been deleted (e.g. from another tab).
+- There must always be at least one profile — deleting the last remaining
+  one is rejected at the query layer.
+
+---
+
 ## Ingest logic (pseudocode)
 
 When `POST /api/song-drill/songs/ingest` receives a JSON file:
@@ -248,17 +278,21 @@ Use `INSERT OR REPLACE` or `ON CONFLICT UPDATE` for song_vocab if re-ingesting.
 
 ## Notes on design decisions
 
-- **Vocab progress is per-song** (`UNIQUE(song_id, vocab_id)`) not global.
-  The same word in two songs gets two separate SRS tracks, because the context
-  meanings are different.
-- **Line progress is global** (`UNIQUE(line_id)`) because a line belongs to one
-  song — there's no ambiguity.
+- **Vocab progress is per-profile, per-song** (`UNIQUE(user_id, song_id, vocab_id)`)
+  not global. The same word in two songs gets two separate SRS tracks, because
+  the context meanings are different — and the same word in the same song gets
+  a separate track per profile.
+- **Line progress is per-profile** (`UNIQUE(user_id, line_id)`) — a line already
+  belongs to one song, so no song_id is needed, but each profile still tracks
+  it independently.
 - **Chorus repeats are preserved in `lines`** because the song reader needs to
   display the song faithfully. SRS line drill deduplicates naturally since
   repeated lines have different `line_id` values but the same `text` — this
   is acceptable, the user may see similar cards.
-- **`song_vocab.context_meaning`** is the primary learning hook — this is what
-  gets shown on the vocab drill card reveal, not `vocab.base_meaning`.
+- **`vocab.base_meaning`** is what's shown on the vocab drill card reveal — a
+  plain dictionary definition. `song_vocab.context_meaning` (the per-song
+  emotional framing) currently only backs vocab search matching in the song
+  detail page, not its own visible field.
 - **Content-less lines are ingested, not filtered** — `lines` stays fully lossless
   regardless of upstream scrape quality. They're excluded from the *line drill
   SRS queue* (`WHERE reading != ''`), since there's nothing to quiz, but they

@@ -1,3 +1,14 @@
+-- User profiles. No authentication — the app is Tailscale-only (network
+-- access is already gated), so this just partitions progress/stats between
+-- people sharing the same install. Selected via a plain cookie (see
+-- backend/handlers/profiles.go), not a password.
+CREATE TABLE IF NOT EXISTS users (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    color        TEXT NOT NULL DEFAULT '#a78bfa', -- accent color for the profile picker UI
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Songs
 CREATE TABLE IF NOT EXISTS songs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +70,7 @@ CREATE TABLE IF NOT EXISTS line_words (
 -- only stores whatever that package's State struct needs persisted.
 CREATE TABLE IF NOT EXISTS vocab_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
     vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
     state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
@@ -70,12 +82,13 @@ CREATE TABLE IF NOT EXISTS vocab_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
     last_seen     TEXT,
-    UNIQUE(song_id, vocab_id)               -- progress is per song, not global
+    UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
 );
 
 -- SRS progress for line cards (same state machine as vocab_progress).
 CREATE TABLE IF NOT EXISTS line_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     line_id       INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
     state         TEXT NOT NULL DEFAULT 'new',
     step_index    INTEGER NOT NULL DEFAULT 0,
@@ -86,5 +99,5 @@ CREATE TABLE IF NOT EXISTS line_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen     TEXT,
-    UNIQUE(line_id)
+    UNIQUE(user_id, line_id)
 );

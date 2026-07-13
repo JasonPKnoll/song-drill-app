@@ -48,9 +48,10 @@ func testSong(t *testing.T, database *sql.DB) (songID, vocabID, lineID int64) {
 // learning/relearning — never after just one.
 func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.T) {
 	database := openTestDB(t)
+	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	first, err := RecordVocabResult(database, songID, vocabID, true)
+	first, err := RecordVocabResult(database, userID, songID, vocabID, true)
 	if err != nil {
 		t.Fatalf("first RecordVocabResult: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing
 		t.Fatalf("after 1st correct answer: Stage = %q, want %q (should not be done yet)", first.Stage, srs.StageLearning)
 	}
 
-	second, err := RecordVocabResult(database, songID, vocabID, true)
+	second, err := RecordVocabResult(database, userID, songID, vocabID, true)
 	if err != nil {
 		t.Fatalf("second RecordVocabResult: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing
 	}
 
 	var seen, correct int
-	if err := database.QueryRow(`SELECT seen, correct FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`, songID, vocabID).Scan(&seen, &correct); err != nil {
+	if err := database.QueryRow(`SELECT seen, correct FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`, userID, songID, vocabID).Scan(&seen, &correct); err != nil {
 		t.Fatalf("query seen/correct: %v", err)
 	}
 	if seen != 2 || correct != 2 {
@@ -77,9 +78,10 @@ func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing
 
 func TestRecordVocabResult_MissKeepsCardInRotation(t *testing.T) {
 	database := openTestDB(t)
+	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	result, err := RecordVocabResult(database, songID, vocabID, false)
+	result, err := RecordVocabResult(database, userID, songID, vocabID, false)
 	if err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
@@ -92,9 +94,10 @@ func TestRecordVocabResult_MissKeepsCardInRotation(t *testing.T) {
 }
 
 // Progress is per-song: the same word studied in two different songs must
-// track two independent SRS states, per the UNIQUE(song_id, vocab_id) design.
+// track two independent SRS states, per the UNIQUE(user_id, song_id, vocab_id) design.
 func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 	database := openTestDB(t)
+	userID := defaultUserID(t, database)
 	songA, vocabID, _ := testSong(t, database)
 
 	payload := IngestPayload{
@@ -108,7 +111,7 @@ func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 		t.Fatalf("IngestSong (song B): %v", err)
 	}
 
-	if _, err := RecordVocabResult(database, songA, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, songA, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult (song A): %v", err)
 	}
 
@@ -120,7 +123,7 @@ func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 		t.Fatalf("vocab_progress rows for vocab_id after answering only in song A = %d, want 1", count)
 	}
 
-	stateB, err := RecordVocabResult(database, songB, vocabID, true)
+	stateB, err := RecordVocabResult(database, userID, songB, vocabID, true)
 	if err != nil {
 		t.Fatalf("RecordVocabResult (song B): %v", err)
 	}
@@ -136,11 +139,50 @@ func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 	}
 }
 
+// The point of profiles: two people sharing an install must not see or
+// affect each other's SRS progress on the exact same song/word.
+func TestRecordVocabResult_ProgressIsPerProfile(t *testing.T) {
+	database := openTestDB(t)
+	userA := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	userB, err := CreateUser(database, "Second Player", "#6ee7a0")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult (user A): %v", err)
+	}
+	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult (user A, 2nd): %v", err)
+	}
+
+	// User B has never touched this card — their first answer must start
+	// fresh (learning), not inherit user A's already-graduated review state.
+	stateB, err := RecordVocabResult(database, userB.ID, songID, vocabID, true)
+	if err != nil {
+		t.Fatalf("RecordVocabResult (user B): %v", err)
+	}
+	if stateB.Stage != srs.StageLearning {
+		t.Errorf("user B's first answer: Stage = %q, want %q (must not inherit user A's progress)", stateB.Stage, srs.StageLearning)
+	}
+
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`, songID, vocabID).Scan(&count); err != nil {
+		t.Fatalf("count vocab_progress: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("vocab_progress rows for this song/word across both profiles = %d, want 2", count)
+	}
+}
+
 func TestRecordLineResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.T) {
 	database := openTestDB(t)
+	userID := defaultUserID(t, database)
 	_, _, lineID := testSong(t, database)
 
-	first, err := RecordLineResult(database, lineID, true)
+	first, err := RecordLineResult(database, userID, lineID, true)
 	if err != nil {
 		t.Fatalf("first RecordLineResult: %v", err)
 	}
@@ -148,7 +190,7 @@ func TestRecordLineResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.
 		t.Fatalf("after 1st correct answer: Stage = %q, want %q", first.Stage, srs.StageLearning)
 	}
 
-	second, err := RecordLineResult(database, lineID, true)
+	second, err := RecordLineResult(database, userID, lineID, true)
 	if err != nil {
 		t.Fatalf("second RecordLineResult: %v", err)
 	}
@@ -163,13 +205,14 @@ func TestRecordLineResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.
 // through its steps far faster than the schedule intends.
 func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
 	database := openTestDB(t)
+	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if _, err := RecordVocabResult(database, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
-	cards, err := VocabDrillQueue(database, &songID, 20)
+	cards, err := VocabDrillQueue(database, userID, &songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
@@ -177,6 +220,40 @@ func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
 		if c.VocabID == vocabID {
 			t.Errorf("card %d appeared in queue despite being due ~1 minute in the future", vocabID)
 		}
+	}
+}
+
+// A card one profile has already started learning must still show up as
+// fully "new" in another profile's queue.
+func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
+	database := openTestDB(t)
+	userA := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	userB, err := CreateUser(database, "Second Player", "#6ee7a0")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult (user A): %v", err)
+	}
+
+	cards, err := VocabDrillQueue(database, userB.ID, &songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue (user B): %v", err)
+	}
+	var found bool
+	for _, c := range cards {
+		if c.VocabID == vocabID {
+			found = true
+			if c.State != "new" {
+				t.Errorf("user B's card state = %q, want %q (unaffected by user A's progress)", c.State, "new")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("user B's queue is missing the card entirely — it should still be new for them")
 	}
 }
 
@@ -188,4 +265,14 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { database.Close() })
 	return database
+}
+
+// defaultUserID returns the profile migrate() always guarantees exists.
+func defaultUserID(t *testing.T, database *sql.DB) int64 {
+	t.Helper()
+	id, err := FirstUserID(database)
+	if err != nil {
+		t.Fatalf("FirstUserID: %v", err)
+	}
+	return id
 }
