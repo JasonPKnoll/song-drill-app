@@ -61,8 +61,8 @@ export interface VocabCard {
 	furi: string;
 	context_meaning: string;
 	example_line?: Line;
-	streak: number;
-	next_review: string;
+	state: 'new' | 'learning' | 'review' | 'relearning';
+	due: string;
 }
 
 export interface LineCard {
@@ -73,8 +73,8 @@ export interface LineCard {
 	furi: string;
 	natural: string;
 	grammar_note?: string;
-	streak: number;
-	next_review: string;
+	state: 'new' | 'learning' | 'review' | 'relearning';
+	due: string;
 }
 
 export interface Stats {
@@ -141,18 +141,22 @@ export function getLineDrillQueue(
 	return request(`/drill/lines?${params}`, undefined, fetchFn);
 }
 
-export function recordVocabResult(
-	songId: number,
-	vocabId: number,
-	correct: boolean
-): Promise<{ ok: boolean }> {
+export interface DrillResult {
+	ok: boolean;
+	// Whether this card still needs same-day repetition (learning/relearning)
+	// or is done for now (review) — see the drill pages, which re-queue a
+	// card in the current session while it's still learning/relearning.
+	state: 'new' | 'learning' | 'review' | 'relearning';
+}
+
+export function recordVocabResult(songId: number, vocabId: number, correct: boolean): Promise<DrillResult> {
 	return request('/drill/result', {
 		method: 'POST',
 		body: JSON.stringify({ type: 'vocab', song_id: songId, vocab_id: vocabId, correct })
 	});
 }
 
-export function recordLineResult(lineId: number, correct: boolean): Promise<{ ok: boolean }> {
+export function recordLineResult(lineId: number, correct: boolean): Promise<DrillResult> {
 	return request('/drill/result', {
 		method: 'POST',
 		body: JSON.stringify({ type: 'line', line_id: lineId, correct })

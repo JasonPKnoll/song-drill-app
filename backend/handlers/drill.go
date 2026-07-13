@@ -62,31 +62,40 @@ func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var state string
 	switch req.Type {
 	case "vocab":
 		if req.SongID == nil || req.VocabID == nil {
 			writeError(w, http.StatusBadRequest, "song_id and vocab_id are required for type=vocab")
 			return
 		}
-		if err := db.RecordVocabResult(e.DB, *req.SongID, *req.VocabID, req.Correct); err != nil {
+		next, err := db.RecordVocabResult(e.DB, *req.SongID, *req.VocabID, req.Correct)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		state = string(next.Stage)
 	case "line":
 		if req.LineID == nil {
 			writeError(w, http.StatusBadRequest, "line_id is required for type=line")
 			return
 		}
-		if err := db.RecordLineResult(e.DB, *req.LineID, req.Correct); err != nil {
+		next, err := db.RecordLineResult(e.DB, *req.LineID, req.Correct)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		state = string(next.Stage)
 	default:
 		writeError(w, http.StatusBadRequest, `type must be "vocab" or "line"`)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	// `state` tells the caller whether this card still needs same-day
+	// repetition (learning/relearning) or is done for now (review) — see
+	// the frontend drill pages, which re-queue a card in the current
+	// session while it's still learning/relearning.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state})
 }
 
 func parseOptionalSongID(r *http.Request) (id int64, present bool, err error) {

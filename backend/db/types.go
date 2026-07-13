@@ -106,8 +106,8 @@ type VocabCard struct {
 	Furi           string `json:"furi"`
 	ContextMeaning string `json:"context_meaning"`
 	ExampleLine    *Line  `json:"example_line,omitempty"`
-	Streak         int    `json:"streak"`
-	NextReview     string `json:"next_review"`
+	State          string `json:"state"` // srs.Stage: new | learning | review | relearning
+	Due            string `json:"due"`   // ISO 8601 datetime
 }
 
 type LineCard struct {
@@ -118,8 +118,8 @@ type LineCard struct {
 	Furi        string  `json:"furi"`
 	Natural     string  `json:"natural"`
 	GrammarNote *string `json:"grammar_note,omitempty"`
-	Streak      int     `json:"streak"`
-	NextReview  string  `json:"next_review"`
+	State       string  `json:"state"`
+	Due         string  `json:"due"`
 }
 
 type Stats struct {

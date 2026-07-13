@@ -3,9 +3,23 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"song-drill-backend/srs"
 )
+
+// sqliteDatetimeLayout matches the format SQLite's own datetime('now')
+// produces, so stored `due` values compare correctly against it in plain
+// SQL (e.g. `WHERE due <= datetime('now')`) without a custom SQL function.
+const sqliteDatetimeLayout = "2006-01-02 15:04:05"
+
+func formatDue(t time.Time) string {
+	return t.UTC().Format(sqliteDatetimeLayout)
+}
+
+func parseDue(s string) (time.Time, error) {
+	return time.ParseInLocation(sqliteDatetimeLayout, s, time.UTC)
+}
 
 // IngestSong writes a full song payload into the database inside a single
 // transaction, following the ingest logic in song_drill_schema.md.
@@ -99,11 +113,11 @@ func ListSongs(database *sql.DB) ([]SongSummary, error) {
 		SELECT
 			s.id, s.title, s.artist, s.language, s.notes, s.created_at,
 			(SELECT COUNT(*) FROM song_vocab sv WHERE sv.song_id = s.id) AS vocab_count,
-			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.streak >= ?) AS mastered_count,
+			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.state = 'review' AND vp.interval_days >= ?) AS mastered_count,
 			(SELECT COUNT(*) FROM lines l WHERE l.song_id = s.id) AS line_count
 		FROM songs s
 		ORDER BY s.created_at DESC, s.id DESC
-	`, srs.MasteredStreak)
+	`, srs.MasteredIntervalDays)
 	if err != nil {
 		return nil, err
 	}
@@ -256,20 +270,20 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 		SELECT
 			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, sv.context_meaning,
 			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note, l.section,
-			COALESCE(vp.streak, 0), COALESCE(vp.next_review, date('now'))
+			COALESCE(vp.state, 'new'), COALESCE(vp.due, datetime('now'))
 		FROM song_vocab sv
 		JOIN vocab v ON v.id = sv.vocab_id
 		JOIN songs s ON s.id = sv.song_id
 		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
 		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
-		WHERE (vp.next_review IS NULL OR vp.next_review <= date('now'))
+		WHERE (vp.due IS NULL OR vp.due <= datetime('now'))
 	`
 	args := []any{}
 	if songID != nil {
 		query += " AND sv.song_id = ?"
 		args = append(args, *songID)
 	}
-	query += " ORDER BY COALESCE(vp.next_review, date('now')) ASC, sv.first_line_position ASC LIMIT ?"
+	query += " ORDER BY COALESCE(vp.due, datetime('now')) ASC, sv.first_line_position ASC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := database.Query(query, args...)
@@ -287,7 +301,7 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 		if err := rows.Scan(
 			&c.SongID, &c.SongTitle, &c.VocabID, &c.Surface, &c.Reading, &c.Furi, &c.ContextMeaning,
 			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote, &lineSection,
-			&c.Streak, &c.NextReview,
+			&c.State, &c.Due,
 		); err != nil {
 			return nil, err
 		}
@@ -318,19 +332,19 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, error) {
 	query := `
 		SELECT l.id, l.song_id, s.title, l.text, l.furi, l.natural, l.grammar_note,
-			COALESCE(lp.streak, 0), COALESCE(lp.next_review, date('now'))
+			COALESCE(lp.state, 'new'), COALESCE(lp.due, datetime('now'))
 		FROM lines l
 		JOIN songs s ON s.id = l.song_id
 		LEFT JOIN line_progress lp ON lp.line_id = l.id
 		WHERE l.reading != ''
-		AND (lp.next_review IS NULL OR lp.next_review <= date('now'))
+		AND (lp.due IS NULL OR lp.due <= datetime('now'))
 	`
 	args := []any{}
 	if songID != nil {
 		query += " AND l.song_id = ?"
 		args = append(args, *songID)
 	}
-	query += " ORDER BY COALESCE(lp.next_review, date('now')) ASC, l.position ASC LIMIT ?"
+	query += " ORDER BY COALESCE(lp.due, datetime('now')) ASC, l.position ASC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := database.Query(query, args...)
@@ -343,7 +357,7 @@ func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, err
 	for rows.Next() {
 		var c LineCard
 		var grammarNote sql.NullString
-		if err := rows.Scan(&c.LineID, &c.SongID, &c.SongTitle, &c.Text, &c.Furi, &c.Natural, &grammarNote, &c.Streak, &c.NextReview); err != nil {
+		if err := rows.Scan(&c.LineID, &c.SongID, &c.SongTitle, &c.Text, &c.Furi, &c.Natural, &grammarNote, &c.State, &c.Due); err != nil {
 			return nil, err
 		}
 		if grammarNote.Valid {
@@ -354,54 +368,106 @@ func LineDrillQueue(database *sql.DB, songID *int64, limit int) ([]LineCard, err
 	return cards, rows.Err()
 }
 
-// RecordVocabResult upserts vocab_progress for (songID, vocabID) applying the SRS update.
-func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) error {
-	var streak int
-	err := database.QueryRow(`SELECT streak FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`, songID, vocabID).Scan(&streak)
-	if err != nil && err != sql.ErrNoRows {
-		return err
+// RecordVocabResult upserts vocab_progress for (songID, vocabID), loading its
+// current srs.State (or a fresh one, if this card has never been seen),
+// applying the grade, and persisting the result. Returns the resulting
+// state so the caller can tell whether this card still needs same-day
+// repetition (learning/relearning) or is done for now (review).
+func RecordVocabResult(database *sql.DB, songID, vocabID int64, correct bool) (srs.State, error) {
+	now := time.Now()
+	current := srs.New(now)
+
+	var stage, due string
+	err := database.QueryRow(
+		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`,
+		songID, vocabID,
+	).Scan(&stage, &current.StepIndex, &current.EaseFactor, &current.IntervalDays, &current.Lapses, &due)
+	switch {
+	case err == sql.ErrNoRows:
+		// current already holds a fresh srs.New(now) state.
+	case err != nil:
+		return srs.State{}, err
+	default:
+		current.Stage = srs.Stage(stage)
+		if current.Due, err = parseDue(due); err != nil {
+			return srs.State{}, fmt.Errorf("parse due: %w", err)
+		}
 	}
-	newStreak, nextReview := srs.Update(streak, correct)
+
+	next := srs.Answer(current, correct, now)
 	correctInc := 0
 	if correct {
 		correctInc = 1
 	}
+
 	_, err = database.Exec(`
-		INSERT INTO vocab_progress (song_id, vocab_id, streak, seen, correct, next_review, last_seen)
-		VALUES (?, ?, ?, 1, ?, ?, date('now'))
+		INSERT INTO vocab_progress (song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 		ON CONFLICT(song_id, vocab_id) DO UPDATE SET
-			streak = excluded.streak,
+			state = excluded.state,
+			step_index = excluded.step_index,
+			ease_factor = excluded.ease_factor,
+			interval_days = excluded.interval_days,
+			lapses = excluded.lapses,
 			seen = vocab_progress.seen + 1,
 			correct = vocab_progress.correct + ?,
-			next_review = excluded.next_review,
-			last_seen = date('now')
-	`, songID, vocabID, newStreak, correctInc, nextReview, correctInc)
-	return err
+			due = excluded.due,
+			last_seen = excluded.last_seen
+	`, songID, vocabID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
+		correctInc, formatDue(next.Due), formatDue(now), correctInc)
+	if err != nil {
+		return srs.State{}, err
+	}
+	return next, nil
 }
 
-// RecordLineResult upserts line_progress for lineID applying the SRS update.
-func RecordLineResult(database *sql.DB, lineID int64, correct bool) error {
-	var streak int
-	err := database.QueryRow(`SELECT streak FROM line_progress WHERE line_id = ?`, lineID).Scan(&streak)
-	if err != nil && err != sql.ErrNoRows {
-		return err
+// RecordLineResult upserts line_progress for lineID, same shape as RecordVocabResult.
+func RecordLineResult(database *sql.DB, lineID int64, correct bool) (srs.State, error) {
+	now := time.Now()
+	current := srs.New(now)
+
+	var stage, due string
+	err := database.QueryRow(
+		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM line_progress WHERE line_id = ?`,
+		lineID,
+	).Scan(&stage, &current.StepIndex, &current.EaseFactor, &current.IntervalDays, &current.Lapses, &due)
+	switch {
+	case err == sql.ErrNoRows:
+		// current already holds a fresh srs.New(now) state.
+	case err != nil:
+		return srs.State{}, err
+	default:
+		current.Stage = srs.Stage(stage)
+		if current.Due, err = parseDue(due); err != nil {
+			return srs.State{}, fmt.Errorf("parse due: %w", err)
+		}
 	}
-	newStreak, nextReview := srs.Update(streak, correct)
+
+	next := srs.Answer(current, correct, now)
 	correctInc := 0
 	if correct {
 		correctInc = 1
 	}
+
 	_, err = database.Exec(`
-		INSERT INTO line_progress (line_id, streak, seen, correct, next_review, last_seen)
-		VALUES (?, ?, 1, ?, ?, date('now'))
+		INSERT INTO line_progress (line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 		ON CONFLICT(line_id) DO UPDATE SET
-			streak = excluded.streak,
+			state = excluded.state,
+			step_index = excluded.step_index,
+			ease_factor = excluded.ease_factor,
+			interval_days = excluded.interval_days,
+			lapses = excluded.lapses,
 			seen = line_progress.seen + 1,
 			correct = line_progress.correct + ?,
-			next_review = excluded.next_review,
-			last_seen = date('now')
-	`, lineID, newStreak, correctInc, nextReview, correctInc)
-	return err
+			due = excluded.due,
+			last_seen = excluded.last_seen
+	`, lineID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
+		correctInc, formatDue(next.Due), formatDue(now), correctInc)
+	if err != nil {
+		return srs.State{}, err
+	}
+	return next, nil
 }
 
 // GetStats returns overall progress stats across every song.
@@ -413,26 +479,26 @@ func GetStats(database *sql.DB) (*Stats, error) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM song_vocab`).Scan(&st.TotalVocab); err != nil {
 		return nil, err
 	}
-	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE streak >= ?`, srs.MasteredStreak).Scan(&st.MasteredVocab); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE state = 'review' AND interval_days >= ?`, srs.MasteredIntervalDays).Scan(&st.MasteredVocab); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM lines`).Scan(&st.TotalLines); err != nil {
 		return nil, err
 	}
-	if err := database.QueryRow(`SELECT COUNT(*) FROM line_progress WHERE streak >= ?`, srs.MasteredStreak).Scan(&st.MasteredLines); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM line_progress WHERE state = 'review' AND interval_days >= ?`, srs.MasteredIntervalDays).Scan(&st.MasteredLines); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`
 		SELECT COUNT(*) FROM song_vocab sv
 		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id
-		WHERE vp.next_review IS NULL OR vp.next_review <= date('now')
+		WHERE vp.due IS NULL OR vp.due <= datetime('now')
 	`).Scan(&st.VocabDueToday); err != nil {
 		return nil, err
 	}
 	if err := database.QueryRow(`
 		SELECT COUNT(*) FROM lines l
 		LEFT JOIN line_progress lp ON lp.line_id = l.id
-		WHERE lp.next_review IS NULL OR lp.next_review <= date('now')
+		WHERE lp.due IS NULL OR lp.due <= datetime('now')
 	`).Scan(&st.LinesDueToday); err != nil {
 		return nil, err
 	}

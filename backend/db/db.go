@@ -38,6 +38,29 @@ func Open(path string) (*sql.DB, error) {
 // — an existing database keeps whatever columns it had when first created, so
 // later additions need to be applied explicitly here.
 func migrate(database *sql.DB) error {
+	// vocab_progress / line_progress moved from a fixed streak+date model to
+	// a full Anki-style state machine (state, step_index, ease_factor,
+	// interval_days, lapses, due-as-datetime instead of next_review-as-date).
+	// The only rows that ever existed under the old shape were zero-progress
+	// rows from early development testing, so migrating them column-by-column
+	// isn't worth the complexity — dropping and letting schema.sql recreate
+	// the tables fresh is equivalent and much simpler.
+	for _, table := range []string{"vocab_progress", "line_progress"} {
+		hasNewShape, err := hasColumn(database, table, "state")
+		if err != nil {
+			return fmt.Errorf("check %s.state: %w", table, err)
+		}
+		if hasNewShape {
+			continue
+		}
+		if _, err := database.Exec(fmt.Sprintf(`DROP TABLE %s`, table)); err != nil {
+			return fmt.Errorf("drop old-shape %s: %w", table, err)
+		}
+	}
+	if _, err := database.Exec(schemaSQL); err != nil {
+		return fmt.Errorf("recreate dropped tables: %w", err)
+	}
+
 	columnMigrations := []struct {
 		table  string
 		column string

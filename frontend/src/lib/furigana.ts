@@ -1,6 +1,10 @@
 export type FuriSegment = { type: 'ruby'; base: string; reading: string } | { type: 'text'; value: string };
 
-const KANJI_RE = /[一-鿿㐀-䶿]/;
+// Includes 々 (U+3005, the kanji iteration mark, e.g. 悠々) — it isn't a CJK
+// ideograph itself, but it always stands in for a repeated kanji and needs
+// to be eligible for the same ruby-reading tail match, or a bracket's
+// reading silently gets dropped whenever a word ends in it.
+const KANJI_RE = /[一-鿿㐀-䶿々]/;
 
 // A 漢字[よみ] bracket's reading only applies to the contiguous kanji run
 // immediately before the bracket — any kana earlier in the same chunk

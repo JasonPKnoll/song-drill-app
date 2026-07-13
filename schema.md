@@ -149,56 +149,76 @@ CREATE TABLE line_words (
     position    INTEGER NOT NULL             -- word order within the line
 );
 
--- SRS progress for vocab cards
+-- SRS progress for vocab cards. Anki-style state machine (new -> learning ->
+-- review, with relearning on a lapse from review) — see backend/srs/srs.go.
 CREATE TABLE vocab_progress (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    song_id     INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
-    vocab_id    INTEGER NOT NULL REFERENCES vocab(id),
-    streak      INTEGER NOT NULL DEFAULT 0,
-    seen        INTEGER NOT NULL DEFAULT 0,
-    correct     INTEGER NOT NULL DEFAULT 0,
-    next_review TEXT NOT NULL DEFAULT (date('now')),
-    last_seen   TEXT,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
+    state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
+    step_index    INTEGER NOT NULL DEFAULT 0,             -- position within the current learning/relearning steps
+    ease_factor   REAL NOT NULL DEFAULT 2.5,              -- SM-2 ease, applied while in the review state
+    interval_days REAL NOT NULL DEFAULT 0,                -- last computed review-state interval
+    lapses        INTEGER NOT NULL DEFAULT 0,             -- times missed while in the review state
+    seen          INTEGER NOT NULL DEFAULT 0,
+    correct       INTEGER NOT NULL DEFAULT 0,
+    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
+    last_seen     TEXT,
     UNIQUE(song_id, vocab_id)               -- progress is per song, not global
 );
 
--- SRS progress for line cards
+-- SRS progress for line cards (same state machine as vocab_progress).
 CREATE TABLE line_progress (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    line_id     INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
-    streak      INTEGER NOT NULL DEFAULT 0,
-    seen        INTEGER NOT NULL DEFAULT 0,
-    correct     INTEGER NOT NULL DEFAULT 0,
-    next_review TEXT NOT NULL DEFAULT (date('now')),
-    last_seen   TEXT,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    line_id       INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
+    state         TEXT NOT NULL DEFAULT 'new',
+    step_index    INTEGER NOT NULL DEFAULT 0,
+    ease_factor   REAL NOT NULL DEFAULT 2.5,
+    interval_days REAL NOT NULL DEFAULT 0,
+    lapses        INTEGER NOT NULL DEFAULT 0,
+    seen          INTEGER NOT NULL DEFAULT 0,
+    correct       INTEGER NOT NULL DEFAULT 0,
+    due           TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen     TEXT,
     UNIQUE(line_id)
 );
 ```
 
 ---
 
-## SRS Intervals
+## SRS Algorithm
 
-```
-Streak 0 → today (new or just missed)
-Streak 1 → +1 day
-Streak 2 → +3 days
-Streak 3 → +7 days
-Streak 4 → +14 days
-Streak 5 → +30 days  ← mastered threshold
-Streak 6 → +90 days
-```
+Anki-style scheduler (classic SM-2-derived, not FSRS), reduced to a plain
+correct/incorrect grade — no Hard/Easy buttons, per Anki's own community
+guidance that they're hard to grade consistently and mostly add noise.
+Implemented in Go (`backend/srs/srs.go`) and nowhere else — the frontend
+never computes SRS state, it only calls API endpoints and renders results.
 
-Implemented in Go (`backend/srs/srs.go`). Not in the frontend.
+**Stages:** `new` → `learning` → `review`, with a miss in `review` dropping
+the card into `relearning` before it re-graduates back to `review`.
 
-```go
-var intervals = []int{0, 1, 3, 7, 14, 30, 90}
+**Learning / relearning** (same-day, minutes-scale):
+- Learning steps: `1m, 10m` — a correct answer advances one step; passing
+  the last step graduates the card into `review` with a 1-day interval.
+- Relearning step: `10m` — same mechanic, entered on a review-stage lapse;
+  graduating back out restores the interval assigned at the moment of lapse
+  (see below), not the standard 1-day graduating interval.
+- A miss during learning/relearning resets to the **first** step — same-day,
+  shown again soon — not out of the phase entirely. This is the "resets
+  progress for that word for the day" behavior.
 
-func NextReview(streak int) string {
-    days := intervals[min(streak, len(intervals)-1)]
-    return time.Now().AddDate(0, 0, days).Format("2006-01-02")
-}
-```
+**Review** (day-scale, ease-factor driven):
+- Starting ease: 2.5 (250%). Passing a review multiplies the interval by the
+  current ease (`interval *= ease`); ease itself doesn't change on a pass
+  (no Easy button to raise it further).
+- A miss (lapse): ease drops by 20 percentage points (floor 130%), the
+  interval that took however long to earn is forfeited and reset to the
+  1-day minimum, and the card drops into `relearning`.
+- `lapses` is tracked per card (for a future leech indicator, e.g. flagging
+  after 8 lapses, matching Anki's default) but nothing currently acts on it.
+
+**Mastered** (a display/stats concept, not part of the algorithm): a card
+in the `review` stage with `interval_days >= 30`.
 
 ---
 

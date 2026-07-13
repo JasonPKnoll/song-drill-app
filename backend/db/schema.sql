@@ -53,27 +53,38 @@ CREATE TABLE IF NOT EXISTS line_words (
     position    INTEGER NOT NULL             -- word order within the line
 );
 
--- SRS progress for vocab cards
+-- SRS progress for vocab cards. Anki-style state machine (new -> learning ->
+-- review, with relearning on a lapse from review) — see backend/srs/srs.go,
+-- the single source of truth for the scheduling algorithm itself; this table
+-- only stores whatever that package's State struct needs persisted.
 CREATE TABLE IF NOT EXISTS vocab_progress (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    song_id     INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
-    vocab_id    INTEGER NOT NULL REFERENCES vocab(id),
-    streak      INTEGER NOT NULL DEFAULT 0,
-    seen        INTEGER NOT NULL DEFAULT 0,
-    correct     INTEGER NOT NULL DEFAULT 0,
-    next_review TEXT NOT NULL DEFAULT (date('now')),
-    last_seen   TEXT,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
+    state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
+    step_index    INTEGER NOT NULL DEFAULT 0,             -- position within the current learning/relearning steps
+    ease_factor   REAL NOT NULL DEFAULT 2.5,              -- SM-2 ease, applied while in the review state
+    interval_days REAL NOT NULL DEFAULT 0,                -- last computed review-state interval
+    lapses        INTEGER NOT NULL DEFAULT 0,              -- times missed while in the review state
+    seen          INTEGER NOT NULL DEFAULT 0,
+    correct       INTEGER NOT NULL DEFAULT 0,
+    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
+    last_seen     TEXT,
     UNIQUE(song_id, vocab_id)               -- progress is per song, not global
 );
 
--- SRS progress for line cards
+-- SRS progress for line cards (same state machine as vocab_progress).
 CREATE TABLE IF NOT EXISTS line_progress (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    line_id     INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
-    streak      INTEGER NOT NULL DEFAULT 0,
-    seen        INTEGER NOT NULL DEFAULT 0,
-    correct     INTEGER NOT NULL DEFAULT 0,
-    next_review TEXT NOT NULL DEFAULT (date('now')),
-    last_seen   TEXT,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    line_id       INTEGER NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
+    state         TEXT NOT NULL DEFAULT 'new',
+    step_index    INTEGER NOT NULL DEFAULT 0,
+    ease_factor   REAL NOT NULL DEFAULT 2.5,
+    interval_days REAL NOT NULL DEFAULT 0,
+    lapses        INTEGER NOT NULL DEFAULT 0,
+    seen          INTEGER NOT NULL DEFAULT 0,
+    correct       INTEGER NOT NULL DEFAULT 0,
+    due           TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen     TEXT,
     UNIQUE(line_id)
 );

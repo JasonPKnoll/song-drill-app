@@ -26,9 +26,16 @@
 		if (!current) return;
 		const card = current;
 		queue = queue.slice(1);
-		done += 1;
 		try {
-			await recordLineResult(card.line_id, correct);
+			const result = await recordLineResult(card.line_id, correct);
+			// Still mid-way through today's learning/relearning steps (e.g. a
+			// miss resets it, or a pass hasn't graduated it yet) — keep it in
+			// this session's rotation instead of counting it done.
+			if (result.state === 'learning' || result.state === 'relearning') {
+				queue = [...queue, card];
+			} else {
+				done += 1;
+			}
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
 		}
