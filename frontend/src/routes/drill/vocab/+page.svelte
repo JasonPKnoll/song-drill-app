@@ -10,21 +10,31 @@
 
 	let queue = $state<VocabCard[]>([]);
 	let done = $state(0);
+	// vocab_ids that have been answered at least once this session — lets the
+	// "left" count split into "new" (never touched yet) vs "in progress" (still
+	// in rotation because it hasn't graduated, whether from a miss or just not
+	// enough correct reps yet), Anki-style.
+	let attemptedIds = $state<Set<number>>(new Set());
 	let actionError = $state<string | null>(null);
 
 	$effect(() => {
 		queue = data.queue;
 		done = 0;
+		attemptedIds = new Set();
 		actionError = null;
 	});
 
 	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
 	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
 	let current = $derived(queue[0] ?? null);
+	let newCount = $derived(queue.filter((c) => !attemptedIds.has(c.vocab_id)).length);
+	let inProgressCount = $derived(queue.length - newCount);
 
 	async function answer(correct: boolean) {
 		if (!current) return;
 		const card = current;
+		const wasAlreadyAttempted = attemptedIds.has(card.vocab_id);
+		attemptedIds = new Set(attemptedIds).add(card.vocab_id);
 		queue = queue.slice(1);
 		try {
 			const result = await recordVocabResult(card.song_id, card.vocab_id, correct);
@@ -38,6 +48,15 @@
 			}
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
+			// The server never recorded this attempt (request failed) — put the
+			// card back at the front instead of letting it vanish from the
+			// session's counts with no state change actually having happened.
+			if (!wasAlreadyAttempted) {
+				const reverted = new Set(attemptedIds);
+				reverted.delete(card.vocab_id);
+				attemptedIds = reverted;
+			}
+			queue = [card, ...queue];
 		}
 	}
 </script>
@@ -46,7 +65,20 @@
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Vocab Drill</h1>
-	<span class="text-sm text-muted">{newCount} new · {wrongCount} wrong · {done} done</span>
+	<div class="flex items-center gap-3" title="{newCount} new · {inProgressCount} in progress · {done} done">
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-new"></span>
+			<span class="text-sm text-muted tabular-nums">{newCount}</span>
+		</span>
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-accent"></span>
+			<span class="text-sm text-muted tabular-nums">{inProgressCount}</span>
+		</span>
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-good"></span>
+			<span class="text-sm text-muted tabular-nums">{done}</span>
+		</span>
+	</div>
 </div>
 
 {#if data.error}
@@ -66,22 +98,22 @@
 	{#key `${current.song_id}-${current.vocab_id}`}
 		<DrillCard onGotIt={() => answer(true)} onMissed={() => answer(false)}>
 			{#snippet front()}
-				<p class="text-sm text-muted">{current.song_title}</p>
 				<p class="text-5xl font-semibold text-ink">{current.surface}</p>
+				{#if current.example_line}
+					<p class="text-lg text-ink">{current.example_line.text}</p>
+				{/if}
 			{/snippet}
 			{#snippet back()}
-				<div class="flex flex-col items-center gap-3 text-center">
-					<p class="text-2xl text-ink">
-						<Furigana furi={current.furi} />
+				<p class="text-2xl text-ink">
+					<Furigana furi={current.furi} />
+				</p>
+				<p class="text-lg text-good">{current.base_meaning}</p>
+				{#if current.example_line}
+					<p class="mt-2 text-base text-ink">
+						<Furigana furi={current.example_line.furi} />
 					</p>
-					<p class="text-lg text-good">{current.base_meaning}</p>
-					{#if current.example_line}
-						<p class="mt-2 text-base text-ink">
-							<Furigana furi={current.example_line.furi} />
-						</p>
-						<p class="text-sm text-muted">{current.example_line.natural}</p>
-					{/if}
-				</div>
+					<p class="text-sm text-muted">{current.example_line.natural}</p>
+				{/if}
 			{/snippet}
 		</DrillCard>
 	{/key}

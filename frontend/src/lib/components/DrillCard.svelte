@@ -27,22 +27,34 @@
 >
 	<button
 		type="button"
-		class={cn(
-			'flex min-h-48 w-full flex-col items-center justify-center gap-4',
-			'text-center',
-			'disabled:cursor-default'
-		)}
+		class={cn('flip-card', 'h-64 w-full', 'text-center')}
 		onclick={() => (revealed = true)}
 		disabled={revealed}
+		aria-pressed={revealed}
 	>
-		{@render front()}
+		<div class="flip-card-inner" class:flipped={revealed}>
+			<div
+				class={cn(
+					'flip-card-face flex flex-col items-center justify-center gap-4',
+					'text-center'
+				)}
+			>
+				{@render front()}
+			</div>
+			<div
+				class={cn(
+					'flip-card-face flip-card-back flex flex-col items-center justify-center gap-3 overflow-y-auto',
+					'text-center'
+				)}
+			>
+				{@render back()}
+			</div>
+		</div>
 	</button>
 
-	{#if revealed}
-		<div class={cn('mt-6 pt-6', 'border-t border-border')}>
-			{@render back()}
-		</div>
-
+	{#if !revealed}
+		<p class="mt-4 text-center text-sm text-muted">Tap to reveal</p>
+	{:else}
 		<div class="mt-6 flex gap-3">
 			<button
 				type="button"
@@ -69,7 +81,35 @@
 				Got it
 			</button>
 		</div>
-	{:else}
-		<p class="mt-4 text-center text-sm text-muted">Tap to reveal</p>
 	{/if}
 </div>
+
+<style>
+	.flip-card {
+		perspective: 1200px;
+		display: block;
+	}
+	.flip-card-inner {
+		position: relative;
+		height: 100%;
+		width: 100%;
+		transition: transform 0.5s;
+		transform-style: preserve-3d;
+	}
+	.flip-card-inner.flipped {
+		transform: rotateY(180deg);
+	}
+	.flip-card-face {
+		position: absolute;
+		inset: 0;
+		backface-visibility: hidden;
+	}
+	.flip-card-back {
+		transform: rotateY(180deg);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.flip-card-inner {
+			transition: none;
+		}
+	}
+</style>

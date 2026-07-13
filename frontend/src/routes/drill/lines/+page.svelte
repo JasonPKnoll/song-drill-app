@@ -98,19 +98,16 @@
 	{#key current.line_id}
 		<DrillCard onGotIt={() => answer(true)} onMissed={() => answer(false)}>
 			{#snippet front()}
-				<p class="text-sm text-muted">{current.song_title}</p>
 				<p class="text-3xl leading-relaxed font-semibold text-ink">{current.text}</p>
 			{/snippet}
 			{#snippet back()}
-				<div class="flex flex-col items-center gap-3 text-center">
-					<p class="text-xl text-ink">
-						<Furigana furi={current.furi} />
-					</p>
-					<p class="text-lg text-good">{current.natural}</p>
-					{#if current.grammar_note}
-						<p class="text-sm text-muted">{current.grammar_note}</p>
-					{/if}
-				</div>
+				<p class="text-xl text-ink">
+					<Furigana furi={current.furi} />
+				</p>
+				<p class="text-lg text-good">{current.natural}</p>
+				{#if current.grammar_note}
+					<p class="text-sm text-muted">{current.grammar_note}</p>
+				{/if}
 			{/snippet}
 		</DrillCard>
 	{/key}
