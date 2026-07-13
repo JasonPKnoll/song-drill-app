@@ -74,7 +74,7 @@
 					<p class="text-2xl text-ink">
 						<Furigana furi={current.furi} />
 					</p>
-					<p class="text-lg text-good">{current.context_meaning}</p>
+					<p class="text-lg text-good">{current.base_meaning}</p>
 					{#if current.example_line}
 						<p class="mt-2 text-base text-ink">
 							<Furigana furi={current.example_line.furi} />

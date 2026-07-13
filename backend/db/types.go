@@ -98,16 +98,16 @@ type SongDetail struct {
 }
 
 type VocabCard struct {
-	SongID         int64  `json:"song_id"`
-	SongTitle      string `json:"song_title"`
-	VocabID        int64  `json:"vocab_id"`
-	Surface        string `json:"surface"`
-	Reading        string `json:"reading"`
-	Furi           string `json:"furi"`
-	ContextMeaning string `json:"context_meaning"`
-	ExampleLine    *Line  `json:"example_line,omitempty"`
-	State          string `json:"state"` // srs.Stage: new | learning | review | relearning
-	Due            string `json:"due"`   // ISO 8601 datetime
+	SongID      int64  `json:"song_id"`
+	SongTitle   string `json:"song_title"`
+	VocabID     int64  `json:"vocab_id"`
+	Surface     string `json:"surface"`
+	Reading     string `json:"reading"`
+	Furi        string `json:"furi"`
+	BaseMeaning string `json:"base_meaning"` // plain dictionary definition — the drill card shows this, not the song-specific context_meaning
+	ExampleLine *Line  `json:"example_line,omitempty"`
+	State       string `json:"state"` // srs.Stage: new | learning | review | relearning
+	Due         string `json:"due"`   // ISO 8601 datetime
 }
 
 type LineCard struct {

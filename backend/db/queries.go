@@ -268,7 +268,7 @@ func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, error) {
 	query := `
 		SELECT
-			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, sv.context_meaning,
+			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, v.base_meaning,
 			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note, l.section,
 			COALESCE(vp.state, 'new'), COALESCE(vp.due, datetime('now'))
 		FROM song_vocab sv
@@ -299,7 +299,7 @@ func VocabDrillQueue(database *sql.DB, songID *int64, limit int) ([]VocabCard, e
 		var lineText, lineReading, lineFuri, lineLiteral, lineNatural, lineContextual, lineGrammarNote, lineSection sql.NullString
 
 		if err := rows.Scan(
-			&c.SongID, &c.SongTitle, &c.VocabID, &c.Surface, &c.Reading, &c.Furi, &c.ContextMeaning,
+			&c.SongID, &c.SongTitle, &c.VocabID, &c.Surface, &c.Reading, &c.Furi, &c.BaseMeaning,
 			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote, &lineSection,
 			&c.State, &c.Due,
 		); err != nil {

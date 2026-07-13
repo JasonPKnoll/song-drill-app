@@ -59,7 +59,7 @@ export interface VocabCard {
 	surface: string;
 	reading: string;
 	furi: string;
-	context_meaning: string;
+	base_meaning: string;
 	example_line?: Line;
 	state: 'new' | 'learning' | 'review' | 'relearning';
 	due: string;
