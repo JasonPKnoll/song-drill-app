@@ -46,7 +46,7 @@
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Vocab Drill</h1>
-	<span class="text-sm text-muted">{done} done · {queue.length} left</span>
+	<span class="text-sm text-muted">{newCount} new · {wrongCount} wrong · {done} done</span>
 </div>
 
 {#if data.error}

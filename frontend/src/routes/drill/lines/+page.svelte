@@ -10,21 +10,31 @@
 
 	let queue = $state<LineCard[]>([]);
 	let done = $state(0);
+	// line_ids that have been answered at least once this session — lets the
+	// "left" count split into "new" (never touched yet) vs "in progress" (still
+	// in rotation because it hasn't graduated, whether from a miss or just not
+	// enough correct reps yet), Anki-style.
+	let attemptedIds = $state<Set<number>>(new Set());
 	let actionError = $state<string | null>(null);
 
 	$effect(() => {
 		queue = data.queue;
 		done = 0;
+		attemptedIds = new Set();
 		actionError = null;
 	});
 
 	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
 	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
 	let current = $derived(queue[0] ?? null);
+	let newCount = $derived(queue.filter((c) => !attemptedIds.has(c.line_id)).length);
+	let inProgressCount = $derived(queue.length - newCount);
 
 	async function answer(correct: boolean) {
 		if (!current) return;
 		const card = current;
+		const wasAlreadyAttempted = attemptedIds.has(card.line_id);
+		attemptedIds = new Set(attemptedIds).add(card.line_id);
 		queue = queue.slice(1);
 		try {
 			const result = await recordLineResult(card.line_id, correct);
@@ -38,6 +48,15 @@
 			}
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
+			// The server never recorded this attempt (request failed) — put the
+			// card back at the front instead of letting it vanish from the
+			// session's counts with no state change actually having happened.
+			if (!wasAlreadyAttempted) {
+				const reverted = new Set(attemptedIds);
+				reverted.delete(card.line_id);
+				attemptedIds = reverted;
+			}
+			queue = [card, ...queue];
 		}
 	}
 </script>
@@ -46,7 +65,20 @@
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Line Drill</h1>
-	<span class="text-sm text-muted">{done} done · {queue.length} left</span>
+	<div class="flex items-center gap-3" title="{newCount} new · {inProgressCount} in progress · {done} done">
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-new"></span>
+			<span class="text-sm text-muted tabular-nums">{newCount}</span>
+		</span>
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-accent"></span>
+			<span class="text-sm text-muted tabular-nums">{inProgressCount}</span>
+		</span>
+		<span class="flex items-center gap-1.5">
+			<span class="h-2 w-2 rounded-full bg-good"></span>
+			<span class="text-sm text-muted tabular-nums">{done}</span>
+		</span>
+	</div>
 </div>
 
 {#if data.error}
