@@ -9,6 +9,7 @@
 		deleteProfile,
 		type Profile
 	} from '$lib/api';
+	import ConfirmDialog from './ConfirmDialog.svelte';
 	import { cn } from '$lib/utils/cn';
 
 	const SWATCHES = ['#a78bfa', '#6ee7a0', '#f87171', '#fbbf24', '#7dd3fc'];
@@ -21,6 +22,7 @@
 	let formName = $state('');
 	let formColor = $state(SWATCHES[0]);
 	let error = $state<string | null>(null);
+	let deleteTarget = $state<Profile | null>(null);
 	let rootEl: HTMLDivElement;
 
 	onMount(() => {
@@ -110,8 +112,10 @@
 		return name.slice(0, 2).toUpperCase();
 	}
 
-	async function remove(p: Profile) {
-		if (!confirm(`Delete profile "${p.display_name}"? This removes all of its progress.`)) return;
+	async function confirmDelete() {
+		const p = deleteTarget;
+		deleteTarget = null;
+		if (!p) return;
 		try {
 			await deleteProfile(p.id);
 			const wasActive = active?.id === p.id;
@@ -180,7 +184,7 @@
 							<button
 								type="button"
 								class="text-xs text-muted hover:text-bad"
-								onclick={() => remove(p)}
+								onclick={() => (deleteTarget = p)}
 								aria-label="Delete {p.display_name}"
 							>
 								✕
@@ -262,3 +266,15 @@
 		</div>
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete profile?"
+	message={deleteTarget
+		? `Delete profile "${deleteTarget.display_name}"? This removes all of its progress.`
+		: ''}
+	confirmLabel="Delete"
+	danger
+	onConfirm={confirmDelete}
+	onCancel={() => (deleteTarget = null)}
+/>

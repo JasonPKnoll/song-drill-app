@@ -3,6 +3,7 @@
 	import { listVocabProgress, burnVocabProgress, resetVocabProgress, type VocabProgressItem } from '$lib/api';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
@@ -12,6 +13,7 @@
 	let bucketFilter = $state<'all' | 'new' | 'progress' | 'done'>('all');
 	let busyId = $state<number | null>(null);
 	let actionError = $state<string | null>(null);
+	let resetTarget = $state<VocabProgressItem | null>(null);
 
 	$effect(() => {
 		items = data.items;
@@ -78,8 +80,10 @@
 		}
 	}
 
-	async function reset(it: VocabProgressItem) {
-		if (!confirm(`Reset progress on "${it.surface}" (${it.song_title})? This can't be undone.`)) return;
+	async function confirmReset() {
+		const it = resetTarget;
+		resetTarget = null;
+		if (!it) return;
 		busyId = itemKey(it);
 		actionError = null;
 		try {
@@ -203,7 +207,7 @@
 									'rounded-lg transition hover:bg-bad/20',
 									'disabled:opacity-50'
 								)}
-								onclick={() => reset(it)}
+								onclick={() => (resetTarget = it)}
 							>
 								Reset
 							</button>
@@ -231,3 +235,15 @@
 		</ul>
 	{/if}
 {/if}
+
+<ConfirmDialog
+	open={resetTarget !== null}
+	title="Reset progress?"
+	message={resetTarget
+		? `Reset progress on "${resetTarget.surface}" (${resetTarget.song_title})? This can't be undone.`
+		: ''}
+	confirmLabel="Reset"
+	danger
+	onConfirm={confirmReset}
+	onCancel={() => (resetTarget = null)}
+/>
