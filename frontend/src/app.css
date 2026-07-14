@@ -27,3 +27,16 @@ ruby rt {
 	font-size: 0.55em;
 	user-select: none;
 }
+
+/* Global focus indicator: a purple ring via box-shadow rather than
+   border-color, since many interactive elements here (icon buttons, the
+   profile avatar circle, plain text actions) have no border at all —
+   box-shadow draws on top regardless, and unlike outline/border it doesn't
+   affect layout or need existing border-width to show up. Plain :focus (not
+   :focus-visible) deliberately — :focus-visible suppresses the ring for
+   mouse clicks on buttons in most browsers, showing it only for keyboard
+   nav, which is the opposite of "show it when I click on something." */
+:focus {
+	outline: none;
+	box-shadow: 0 0 0 2px var(--color-accent);
+}

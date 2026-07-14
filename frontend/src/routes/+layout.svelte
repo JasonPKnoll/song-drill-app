@@ -3,7 +3,6 @@
 	import { onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { cn } from '$lib/utils/cn';
-	import ProfileSwitcher from '$lib/components/ProfileSwitcher.svelte';
 
 	let { children }: { children: Snippet } = $props();
 
@@ -68,7 +67,7 @@
 	)}
 >
 	<header class="border-b border-border">
-		<div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
+		<div class="mx-auto max-w-3xl px-4 py-4">
 			<a href="/" class="wordmark" aria-label="Kotodama" bind:this={wordmarkEl}>
 				{#key replayKey}
 					<span class="wm wm-kanji" aria-hidden="true">
@@ -95,7 +94,6 @@
 					</span>
 				{/key}
 			</a>
-			<ProfileSwitcher />
 		</div>
 	</header>
 

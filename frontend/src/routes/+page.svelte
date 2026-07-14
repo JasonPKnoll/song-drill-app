@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import SongCard from '$lib/components/SongCard.svelte';
+	import ProfileSwitcher from '$lib/components/ProfileSwitcher.svelte';
 	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
@@ -15,12 +16,15 @@
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Song Library</h1>
-	{#if data.songs.length > 0}
-		<div class="flex gap-2">
-			<a href="/drill/vocab" class={drillLinkClass}>Drill all vocab</a>
-			<a href="/drill/lines" class={drillLinkClass}>Drill all lines</a>
-		</div>
-	{/if}
+	<div class="flex items-center gap-3">
+		{#if data.songs.length > 0}
+			<div class="flex gap-2">
+				<a href="/drill/vocab" class={drillLinkClass}>Drill all vocab</a>
+				<a href="/drill/lines" class={drillLinkClass}>Drill all lines</a>
+			</div>
+		{/if}
+		<ProfileSwitcher />
+	</div>
 </div>
 
 {#if data.error}
