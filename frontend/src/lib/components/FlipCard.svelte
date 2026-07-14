@@ -49,12 +49,26 @@
 		perspective: 1200px;
 		display: block;
 	}
+	/* The global focus ring (app.css) is a box-shadow on whatever's actually
+	   focused — here that's this outer, non-rotating button, so the ring
+	   would stay a static, square-cornered box the whole time while the
+	   card content visually rotates/foreshortens inside it. Suppress it
+	   here and re-apply it to .flip-card-inner below instead, which shares
+	   the same rotateY transform as the visible faces, so the ring turns
+	   and narrows in sync with them instead of framing them from outside. */
+	.flip-card:focus {
+		box-shadow: none;
+	}
 	.flip-card-inner {
 		position: relative;
 		height: 100%;
 		width: 100%;
+		border-radius: 1rem;
 		transition: transform 0.5s;
 		transform-style: preserve-3d;
+	}
+	.flip-card:focus .flip-card-inner {
+		box-shadow: 0 0 0 2px var(--color-accent);
 	}
 	.flip-card-inner.flipped {
 		transform: rotateY(180deg);

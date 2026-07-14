@@ -206,3 +206,48 @@ export function renameProfile(id: number, displayName: string, color: string): P
 export function deleteProfile(id: number): Promise<void> {
 	return request(`/profiles/${id}`, { method: 'DELETE' });
 }
+
+// One word's progress for the active profile — the stats sheet's row shape.
+// Every word in the library appears here, not just ones actually drilled;
+// an untouched word defaults to state "new" with due/last_seen absent.
+export interface VocabProgressItem {
+	song_id: number;
+	song_title: string;
+	vocab_id: number;
+	surface: string;
+	reading: string;
+	furi: string;
+	base_meaning: string;
+	state: 'new' | 'learning' | 'review' | 'relearning';
+	interval_days: number;
+	lapses: number;
+	seen: number;
+	correct: number;
+	due?: string;
+	last_seen?: string;
+	mastered: boolean;
+}
+
+export function listVocabProgress(songId?: number, fetchFn?: typeof fetch): Promise<VocabProgressItem[]> {
+	const params = new URLSearchParams();
+	if (songId !== undefined) params.set('song_id', String(songId));
+	const qs = params.toString();
+	return request(`/progress/vocab${qs ? `?${qs}` : ''}`, undefined, fetchFn);
+}
+
+// Manually flags a word as already known, regardless of its real drill
+// history — an SRS override, not a substitute for actually drilling it.
+export function burnVocabProgress(songId: number, vocabId: number): Promise<{ ok: boolean }> {
+	return request('/progress/vocab/burn', {
+		method: 'POST',
+		body: JSON.stringify({ song_id: songId, vocab_id: vocabId })
+	});
+}
+
+// Wipes a word's progress for the active profile back to "new".
+export function resetVocabProgress(songId: number, vocabId: number): Promise<{ ok: boolean }> {
+	return request('/progress/vocab/reset', {
+		method: 'POST',
+		body: JSON.stringify({ song_id: songId, vocab_id: vocabId })
+	});
+}

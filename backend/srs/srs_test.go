@@ -176,6 +176,34 @@ func TestMastered(t *testing.T) {
 	}
 }
 
+func TestBurned(t *testing.T) {
+	s := Burned(epoch)
+	if s.Stage != StageReview {
+		t.Errorf("Stage = %q, want %q", s.Stage, StageReview)
+	}
+	if !s.Mastered() {
+		t.Error("Mastered() = false, want true — a burned card must count as mastered")
+	}
+	if s.IsDue(epoch) {
+		t.Error("IsDue(epoch) = true, want false — a burned card shouldn't resurface immediately")
+	}
+	wantDue := epoch.Add(daysToDuration(BurnedIntervalDays))
+	if !s.Due.Equal(wantDue) {
+		t.Errorf("Due = %v, want %v", s.Due, wantDue)
+	}
+
+	// A burned card should schedule completely normally if it's ever
+	// actually answered again — no special-cased "burned" stage to fall
+	// out of, it's just an ordinary (very long) review-stage card.
+	next := Answer(s, true, epoch)
+	if next.Stage != StageReview {
+		t.Errorf("after answering a burned card correctly: Stage = %q, want %q", next.Stage, StageReview)
+	}
+	if next.IntervalDays <= s.IntervalDays {
+		t.Errorf("IntervalDays after correct answer = %v, want > %v", next.IntervalDays, s.IntervalDays)
+	}
+}
+
 func TestIsDue(t *testing.T) {
 	s := State{Due: epoch}
 	if !s.IsDue(epoch) {

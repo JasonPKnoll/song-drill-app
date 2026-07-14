@@ -568,6 +568,90 @@ func RecordLineResult(database *sql.DB, userID, lineID int64, correct bool) (srs
 	return next, nil
 }
 
+// ListVocabProgress returns every vocab word in the library (or one song, if
+// songID is given) alongside the active profile's progress on it — words
+// never drilled default to "new" with zero stats, the same COALESCE
+// convention VocabDrillQueue uses. This is the stats sheet's data source.
+func ListVocabProgress(database *sql.DB, userID int64, songID *int64) ([]VocabProgressItem, error) {
+	query := `
+		SELECT
+			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, v.base_meaning,
+			COALESCE(vp.state, 'new'), COALESCE(vp.interval_days, 0), COALESCE(vp.lapses, 0),
+			COALESCE(vp.seen, 0), COALESCE(vp.correct, 0), vp.due, vp.last_seen
+		FROM song_vocab sv
+		JOIN vocab v ON v.id = sv.vocab_id
+		JOIN songs s ON s.id = sv.song_id
+		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+	`
+	args := []any{userID}
+	if songID != nil {
+		query += " WHERE sv.song_id = ?"
+		args = append(args, *songID)
+	}
+	query += " ORDER BY s.title ASC, sv.first_line_position ASC"
+
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []VocabProgressItem
+	for rows.Next() {
+		var it VocabProgressItem
+		var due, lastSeen sql.NullString
+		if err := rows.Scan(
+			&it.SongID, &it.SongTitle, &it.VocabID, &it.Surface, &it.Reading, &it.Furi, &it.BaseMeaning,
+			&it.State, &it.IntervalDays, &it.Lapses, &it.Seen, &it.Correct, &due, &lastSeen,
+		); err != nil {
+			return nil, err
+		}
+		if due.Valid {
+			it.Due = &due.String
+		}
+		if lastSeen.Valid {
+			it.LastSeen = &lastSeen.String
+		}
+		it.Mastered = it.State == string(srs.StageReview) && it.IntervalDays >= srs.MasteredIntervalDays
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
+// BurnVocabProgress manually flags a word as already known, per
+// srs.Burned — a stats-sheet override, not something drilling itself ever
+// produces. Real drill history (seen/correct/lapses) is left untouched on
+// an existing row rather than fabricated, since the learner didn't actually
+// answer anything; a brand-new row accurately starts that history at zero.
+func BurnVocabProgress(database *sql.DB, userID, songID, vocabID int64) error {
+	next := srs.Burned(time.Now())
+	_, err := database.Exec(`
+		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, ?, ?)
+		ON CONFLICT(user_id, song_id, vocab_id) DO UPDATE SET
+			state = excluded.state,
+			step_index = 0,
+			ease_factor = excluded.ease_factor,
+			interval_days = excluded.interval_days,
+			due = excluded.due,
+			last_seen = excluded.last_seen
+	`, userID, songID, vocabID, string(next.Stage), next.EaseFactor, next.IntervalDays,
+		formatDue(next.Due), formatDue(time.Now()))
+	return err
+}
+
+// ResetVocabProgress wipes a profile's progress on a word back to "new" by
+// deleting its row entirely — the same representation an actually-untouched
+// word has (COALESCE(vp.state, 'new')), so there's no separate "reset"
+// state to keep in sync with the rest of the schema.
+func ResetVocabProgress(database *sql.DB, userID, songID, vocabID int64) error {
+	_, err := database.Exec(
+		`DELETE FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
+		userID, songID, vocabID,
+	)
+	return err
+}
+
 // GetStats returns overall progress stats across every song, scoped to the
 // given profile (song/line counts stay global — only progress is per-profile).
 func GetStats(database *sql.DB, userID int64) (*Stats, error) {

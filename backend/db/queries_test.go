@@ -257,6 +257,149 @@ func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
 	}
 }
 
+func TestListVocabProgress_DefaultsUntouchedWordsToNew(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	items, err := ListVocabProgress(database, userID, &songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.VocabID != vocabID {
+		t.Errorf("VocabID = %d, want %d", item.VocabID, vocabID)
+	}
+	if item.State != string(srs.StageNew) {
+		t.Errorf("State = %q, want %q", item.State, srs.StageNew)
+	}
+	if item.Due != nil {
+		t.Errorf("Due = %v, want nil for an untouched word", item.Due)
+	}
+	if item.Mastered {
+		t.Error("Mastered = true, want false for a brand-new word")
+	}
+}
+
+func TestListVocabProgress_ReflectsRealProgress(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+
+	items, err := ListVocabProgress(database, userID, &songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].State != string(srs.StageLearning) {
+		t.Errorf("State = %q, want %q", items[0].State, srs.StageLearning)
+	}
+	if items[0].Seen != 1 {
+		t.Errorf("Seen = %d, want 1", items[0].Seen)
+	}
+	if items[0].Due == nil {
+		t.Error("Due = nil, want a real timestamp for a touched word")
+	}
+}
+
+func TestBurnVocabProgress(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+		t.Fatalf("BurnVocabProgress: %v", err)
+	}
+
+	items, err := ListVocabProgress(database, userID, &songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	item := items[0]
+	if item.State != string(srs.StageReview) {
+		t.Errorf("State = %q, want %q", item.State, srs.StageReview)
+	}
+	if !item.Mastered {
+		t.Error("Mastered = false, want true after burning")
+	}
+	// Burning a never-drilled word shouldn't fabricate fake drill history.
+	if item.Seen != 0 || item.Correct != 0 {
+		t.Errorf("Seen=%d Correct=%d, want 0/0 — burning isn't a real answer", item.Seen, item.Correct)
+	}
+}
+
+func TestBurnVocabProgress_PreservesExistingDrillHistory(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+		t.Fatalf("BurnVocabProgress: %v", err)
+	}
+
+	items, err := ListVocabProgress(database, userID, &songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	// The one real answer from before burning must still be reflected.
+	if items[0].Seen != 1 || items[0].Correct != 1 {
+		t.Errorf("Seen=%d Correct=%d, want 1/1 — real history shouldn't be discarded by burning", items[0].Seen, items[0].Correct)
+	}
+}
+
+func TestResetVocabProgress(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+	if err := ResetVocabProgress(database, userID, songID, vocabID); err != nil {
+		t.Fatalf("ResetVocabProgress: %v", err)
+	}
+
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`, userID, songID, vocabID).Scan(&count); err != nil {
+		t.Fatalf("count vocab_progress: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("vocab_progress rows after reset = %d, want 0", count)
+	}
+
+	items, err := ListVocabProgress(database, userID, &songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].State != string(srs.StageNew) {
+		t.Errorf("State after reset = %q, want %q", items[0].State, srs.StageNew)
+	}
+
+	// The reset card must also be immediately due again in the drill queue.
+	cards, err := VocabDrillQueue(database, userID, &songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	var found bool
+	for _, c := range cards {
+		if c.VocabID == vocabID && c.State == string(srs.StageNew) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("reset card did not reappear as new in the drill queue")
+	}
+}
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	database, err := Open(":memory:")

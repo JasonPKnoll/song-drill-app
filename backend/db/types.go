@@ -149,3 +149,31 @@ type DrillResultRequest struct {
 	LineID  *int64 `json:"line_id,omitempty"`
 	Correct bool   `json:"correct"`
 }
+
+// VocabProgressItem is one row of the stats sheet: a word plus the active
+// profile's progress on it, for every word in the library (not just ones
+// that have actually been drilled — untouched words default to "new" with
+// zero stats, matching the drill queue's own COALESCE convention).
+type VocabProgressItem struct {
+	SongID       int64   `json:"song_id"`
+	SongTitle    string  `json:"song_title"`
+	VocabID      int64   `json:"vocab_id"`
+	Surface      string  `json:"surface"`
+	Reading      string  `json:"reading"`
+	Furi         string  `json:"furi"`
+	BaseMeaning  string  `json:"base_meaning"`
+	State        string  `json:"state"` // srs.Stage: new | learning | review | relearning
+	IntervalDays float64 `json:"interval_days"`
+	Lapses       int     `json:"lapses"`
+	Seen         int     `json:"seen"`
+	Correct      int     `json:"correct"`
+	Due          *string `json:"due,omitempty"`
+	LastSeen     *string `json:"last_seen,omitempty"`
+	Mastered     bool    `json:"mastered"`
+}
+
+// VocabProgressActionRequest is the body of the burn/reset endpoints.
+type VocabProgressActionRequest struct {
+	SongID  int64 `json:"song_id"`
+	VocabID int64 `json:"vocab_id"`
+}

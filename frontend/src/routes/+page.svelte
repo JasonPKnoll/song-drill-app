@@ -21,6 +21,7 @@
 			<div class="flex gap-2">
 				<a href="/drill/vocab" class={drillLinkClass}>Drill all vocab</a>
 				<a href="/drill/lines" class={drillLinkClass}>Drill all lines</a>
+				<a href="/stats" class={drillLinkClass}>Progress</a>
 			</div>
 		{/if}
 		<ProfileSwitcher />

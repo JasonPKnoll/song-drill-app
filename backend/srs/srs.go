@@ -46,6 +46,7 @@ const (
 	MinIntervalDays        = 1.0  // Anki's default "new interval" after a lapse resets to this
 	LeechThreshold         = 8    // lapses at which Anki flags a card as a leech (tracked, not acted on)
 	MasteredIntervalDays   = 30.0 // display/stats threshold for "mastered", not part of the algorithm itself
+	BurnedIntervalDays     = 3650 // ~10 years — long enough a manually-burned card won't resurface in practice
 )
 
 // State is a single card's full review state, independent of whatever
@@ -62,6 +63,22 @@ type State struct {
 // New returns the initial state for a card that has never been studied.
 func New(now time.Time) State {
 	return State{Stage: StageNew, EaseFactor: StartingEase, Due: now}
+}
+
+// Burned returns the state for a card the learner has manually flagged as
+// already known — a stats-sheet override, not something the scheduler
+// itself ever produces from an answer. It's just a review-stage card with
+// an interval far past the mastered threshold, so it's indistinguishable
+// from a card that was naturally drilled to that point: it counts as
+// mastered, stays out of the drill queue, and would resume completely
+// normal ease-based scheduling if it were ever answered again.
+func Burned(now time.Time) State {
+	return State{
+		Stage:        StageReview,
+		EaseFactor:   StartingEase,
+		IntervalDays: BurnedIntervalDays,
+		Due:          now.Add(daysToDuration(BurnedIntervalDays)),
+	}
 }
 
 // IsDue reports whether a card should be shown for review at the given time.

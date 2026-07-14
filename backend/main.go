@@ -58,6 +58,11 @@ func main() {
 			r.Post("/result", env.RecordDrillResult)
 		})
 		r.Get("/stats", env.GetStats)
+		r.Route("/progress", func(r chi.Router) {
+			r.Get("/vocab", env.ListVocabProgress)
+			r.Post("/vocab/burn", env.BurnVocabProgress)
+			r.Post("/vocab/reset", env.ResetVocabProgress)
+		})
 		r.Route("/profiles", func(r chi.Router) {
 			r.Get("/", env.ListProfiles)
 			r.Post("/", env.CreateProfile)
