@@ -10,7 +10,8 @@
 		'mb-4 inline-flex items-center gap-1',
 		'text-sm',
 		'text-muted',
-		'transition hover:text-accent'
+		'transition hover:text-accent',
+		'no-focus-ring'
 	)}
 >
 	<span aria-hidden="true">←</span>

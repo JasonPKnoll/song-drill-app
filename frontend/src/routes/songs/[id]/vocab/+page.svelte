@@ -84,7 +84,8 @@
 					'flex h-12 w-12 shrink-0 items-center justify-center',
 					'bg-accent text-bg shadow-black/30',
 					'rounded-full shadow-lg',
-					'transition-transform active:scale-95'
+					'transition-transform active:scale-95',
+					'no-focus-ring'
 				)}
 				aria-label="Back to reader"
 			>

@@ -40,3 +40,15 @@ ruby rt {
 	outline: none;
 	box-shadow: 0 0 0 2px var(--color-accent);
 }
+
+/* Opt out of the ring above for pure "go back" navigation controls (see
+   BackLink.svelte and the reader's floating back button) — they're not a
+   setting or a choice you make, just a way back, so calling them out with
+   the same highlight used for real actions/selections reads as noise. Stays
+   in the keyboard tab order (still a real, useful link/button for
+   keyboard/screen-reader users), just without the visual highlight. A class
+   selector beats the bare :focus above on specificity regardless of source
+   order, so this doesn't depend on rule ordering in this file. */
+.no-focus-ring:focus {
+	box-shadow: none;
+}
