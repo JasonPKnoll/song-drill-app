@@ -16,6 +16,7 @@ export interface SongSummary extends Song {
 	vocab_count: number;
 	mastered_count: number;
 	line_count: number;
+	fully_mastered: boolean; // every word in the song mastered, computed server-side
 }
 
 export interface Line {
@@ -80,14 +81,24 @@ export interface VocabSessionSummary {
 	old: number;
 	introduced_today: number;
 	new_cap: number;
+	at_cap: boolean; // introduced_today >= new_cap, computed server-side
+	// Set only when `cards` comes back empty: the exact moment (ISO 8601)
+	// something in this song next becomes due, computed server-side from the
+	// real SRS schedule. The drill page uses this to arm a single precise
+	// timer instead of polling on a fixed interval.
+	next_due_at?: string;
 }
 
-// LineSessionSummary is VocabSessionSummary's line-drill counterpart — lines
-// have no daily new-word cap, so there's no introduced_today/new_cap.
+// LineSessionSummary is VocabSessionSummary's line-drill counterpart — same
+// shape, same daily-cap/working-set-limit/drip-feed logic, just for lines.
 export interface LineSessionSummary {
 	new: number;
 	in_progress: number;
 	old: number;
+	introduced_today: number;
+	new_cap: number;
+	at_cap: boolean;
+	next_due_at?: string;
 }
 
 export interface LineCard {
@@ -112,12 +123,23 @@ export interface Stats {
 	lines_due_today: number;
 }
 
+// A hung request (a dropped Tailscale connection, the backend momentarily
+// wedged) must not wait forever. Without this, background polling — the
+// drill pages' empty-queue interval — can pile up an unbounded number of
+// in-flight requests that never resolve, eventually exhausting the
+// browser's per-origin connection limit: every other request, including
+// ones triggered by clicking a button, then queues behind them and never
+// even starts. That reads as the whole app freezing, not just one fetch
+// failing.
+const REQUEST_TIMEOUT_MS = 10_000;
+
 // `fetchFn` defaults to the global fetch but should be given the `fetch`
 // passed into a SvelteKit `load` function when called from one — that's the
 // fetch SvelteKit tracks for the request lifecycle of the current navigation.
 async function request<T>(path: string, init?: RequestInit, fetchFn: typeof fetch = fetch): Promise<T> {
 	const res = await fetchFn(`${API_BASE}${path}`, {
 		headers: { 'Content-Type': 'application/json' },
+		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		...init
 	});
 	if (!res.ok) {
@@ -174,6 +196,14 @@ export function getLineDrillQueue(
 ): Promise<{ cards: LineCard[]; summary: LineSessionSummary }> {
 	const params = new URLSearchParams({ song_id: String(songId), limit: String(limit) });
 	return request(`/drill/lines?${params}`, undefined, fetchFn);
+}
+
+// addMoreVocab's line-drill counterpart.
+export function addMoreLines(songId: number, count?: number): Promise<LineSessionSummary> {
+	return request('/drill/lines/more', {
+		method: 'POST',
+		body: JSON.stringify({ count, song_id: songId })
+	});
 }
 
 export interface DrillResult {
@@ -261,6 +291,10 @@ export interface VocabProgressItem {
 	due?: string;
 	last_seen?: string;
 	mastered: boolean;
+	// The stats sheet's at-a-glance category, computed server-side from
+	// state/mastered — mastered wins outright, then new/review map directly,
+	// and anything still learning/relearning is "progress".
+	bucket: 'new' | 'progress' | 'done' | 'burned';
 }
 
 // songId is optional here (unlike the drill queue functions) — this backs

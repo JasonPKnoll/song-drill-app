@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -56,6 +57,7 @@ func main() {
 			r.Get("/vocab", env.VocabDrillQueue)
 			r.Post("/vocab/more", env.AddMoreVocab)
 			r.Get("/lines", env.LineDrillQueue)
+			r.Post("/lines/more", env.AddMoreLines)
 			r.Post("/result", env.RecordDrillResult)
 		})
 		r.Get("/stats", env.GetStats)
@@ -74,8 +76,29 @@ func main() {
 		})
 	})
 
+	// http.ListenAndServe's bare form uses an http.Server with every timeout
+	// at its zero value — in particular no IdleTimeout, so a keep-alive
+	// connection the frontend's dev/preview proxy is holding open can sit
+	// idle forever from the server's own point of view. If that connection
+	// ever goes stale for any reason (however rare), nothing on the Go side
+	// forces it closed, so the next request that happens to reuse it from
+	// the proxy's pool just hangs — indistinguishable from the backend
+	// itself being slow, except no request ever actually lands (see the
+	// "signal timed out" reports with no matching access log line). Explicit
+	// timeouts bound how long an idle connection survives, so a wedged one
+	// gets torn down and the proxy is forced to open a fresh one instead of
+	// reusing it indefinitely.
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("song-drill API listening on %s (db: %s)", addr, dbPath)
-	if err := http.ListenAndServe(addr, r); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

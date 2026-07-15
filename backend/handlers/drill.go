@@ -81,6 +81,38 @@ func (e *Env) LineDrillQueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"cards": cards, "summary": summary})
 }
 
+// addMoreLinesRequest is the body of POST /api/song-drill/drill/lines/more.
+type addMoreLinesRequest struct {
+	SongID int64 `json:"song_id"`
+	Count  int   `json:"count,omitempty"`
+}
+
+// POST /api/song-drill/drill/lines/more
+// Introduces more brand-new lines right now, bypassing db.DailyNewLineCap —
+// AddMoreVocab's line-drill counterpart.
+func (e *Env) AddMoreLines(w http.ResponseWriter, r *http.Request) {
+	var req addMoreLinesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.SongID == 0 {
+		writeError(w, http.StatusBadRequest, "song_id is required")
+		return
+	}
+	count := req.Count
+	if count <= 0 {
+		count = defaultAddMoreCount
+	}
+
+	summary, err := db.IntroduceMoreLines(e.DB, userIDFromContext(r.Context()), req.SongID, count)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
 // POST /api/song-drill/drill/result
 func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 	var req db.DrillResultRequest

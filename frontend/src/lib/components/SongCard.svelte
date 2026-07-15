@@ -3,8 +3,6 @@
 	import { cn } from '$lib/utils/cn';
 
 	let { song }: { song: SongSummary } = $props();
-
-	let fullyMastered = $derived(song.vocab_count > 0 && song.mastered_count === song.vocab_count);
 </script>
 
 <a
@@ -20,7 +18,7 @@
 			<h2 class="text-lg font-semibold text-ink">{song.title}</h2>
 			<p class="text-sm text-muted">{song.artist}</p>
 		</div>
-		{#if fullyMastered}
+		{#if song.fully_mastered}
 			<span
 				class={cn(
 					'px-2 py-1',

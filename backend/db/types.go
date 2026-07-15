@@ -69,9 +69,10 @@ type Song struct {
 
 type SongSummary struct {
 	Song
-	VocabCount    int `json:"vocab_count"`
-	MasteredCount int `json:"mastered_count"`
-	LineCount     int `json:"line_count"`
+	VocabCount    int  `json:"vocab_count"`
+	MasteredCount int  `json:"mastered_count"`
+	LineCount     int  `json:"line_count"`
+	FullyMastered bool `json:"fully_mastered"` // every word in the song mastered — the library grid's badge
 }
 
 type Line struct {
@@ -141,21 +142,35 @@ type LineCard struct {
 // "completed" tally. IntroducedToday/NewCap remain purely for the daily
 // new-word cap display/gating (see VocabDrillQueue), not the three-way
 // split. See the frontend drill pages, which render these as colored dots.
+// NextDueAt, when set, is the earliest moment (RFC 3339) something in this
+// profile+song will next become due — populated only when the current
+// batch of cards is empty. The frontend uses it to schedule exactly one
+// precise timer for "check back then" instead of polling on a fixed
+// interval: the backend already knows this the instant a card is answered
+// (srs.Answer computes the exact due time), so there's no reason for the
+// client to keep guessing with periodic re-checks — all it does is wait
+// for the timestamp it was already given.
 type VocabSessionSummary struct {
-	New             int `json:"new"`
-	InProgress      int `json:"in_progress"`
-	Old             int `json:"old"`
-	IntroducedToday int `json:"introduced_today"`
-	NewCap          int `json:"new_cap"`
+	New             int     `json:"new"`
+	InProgress      int     `json:"in_progress"`
+	Old             int     `json:"old"`
+	IntroducedToday int     `json:"introduced_today"`
+	NewCap          int     `json:"new_cap"`
+	AtCap           bool    `json:"at_cap"` // IntroducedToday >= NewCap — whether today's new-word budget is used up
+	NextDueAt       *string `json:"next_due_at,omitempty"`
 }
 
-// LineSessionSummary is VocabSessionSummary's line-drill counterpart —
-// lines have no daily new-word cap (no introduced_at column), so there's
-// no equivalent IntroducedToday/NewCap.
+// LineSessionSummary is VocabSessionSummary's line-drill counterpart — same
+// shape, same daily-cap/working-set-limit/drip-feed logic, just over
+// line_progress instead of vocab_progress (see DailyNewLineCap).
 type LineSessionSummary struct {
-	New        int `json:"new"`
-	InProgress int `json:"in_progress"`
-	Old        int `json:"old"`
+	New             int     `json:"new"`
+	InProgress      int     `json:"in_progress"`
+	Old             int     `json:"old"`
+	IntroducedToday int     `json:"introduced_today"`
+	NewCap          int     `json:"new_cap"`
+	AtCap           bool    `json:"at_cap"`
+	NextDueAt       *string `json:"next_due_at,omitempty"`
 }
 
 type Stats struct {
@@ -197,6 +212,11 @@ type VocabProgressItem struct {
 	Due          *string `json:"due,omitempty"`
 	LastSeen     *string `json:"last_seen,omitempty"`
 	Mastered     bool    `json:"mastered"`
+	// Bucket is the stats sheet's at-a-glance category, derived from
+	// State/Mastered the same way the drill pages' dots are: mastered wins
+	// outright regardless of stage, then new/review map directly, and
+	// anything still learning/relearning falls into "progress".
+	Bucket string `json:"bucket"` // new | progress | done | burned
 }
 
 // VocabProgressActionRequest is the body of the burn/reset endpoints.

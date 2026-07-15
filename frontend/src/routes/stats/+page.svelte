@@ -25,29 +25,15 @@
 	// fetch just for a heading/back-link label.
 	let songTitle = $derived(data.songId !== undefined ? (items[0]?.song_title ?? null) : null);
 
-	// Same three-way grouping as the drill counters (blue new / purple in
-	// progress / green done) — learning and relearning both read as
-	// "still being worked on" here, there's no reason to split them further
-	// on a progress overview. Mastered/burned cards are pulled into their
-	// own bucket regardless of stage (in practice always "review"), so
-	// "Done" reads as "graduated and still on its own schedule" while
-	// "Burned" is specifically the manually-deactivated ones.
-	function bucket(it: VocabProgressItem): 'new' | 'progress' | 'done' | 'burned' {
-		if (it.mastered) return 'burned';
-		if (it.state === 'new') return 'new';
-		if (it.state === 'review') return 'done';
-		return 'progress';
-	}
-
 	let counts = $derived.by(() => {
 		const c = { new: 0, progress: 0, done: 0, burned: 0 };
-		for (const it of items) c[bucket(it)]++;
+		for (const it of items) c[it.bucket]++;
 		return c;
 	});
 
 	let filtered = $derived.by(() => {
 		let list = items;
-		if (bucketFilter !== 'all') list = list.filter((it) => bucket(it) === bucketFilter);
+		if (bucketFilter !== 'all') list = list.filter((it) => it.bucket === bucketFilter);
 		const raw = query.trim();
 		if (raw) {
 			const q = raw.toLowerCase();
@@ -191,7 +177,7 @@
 		<p class="mb-3 text-sm text-muted">{filtered.length} of {items.length} words</p>
 		<ul class="flex flex-col gap-2">
 			{#each filtered as it (itemKey(it))}
-				{@const b = bucket(it)}
+				{@const b = it.bucket}
 				<li
 					class={cn(
 						'flex flex-wrap items-center gap-3 p-4',

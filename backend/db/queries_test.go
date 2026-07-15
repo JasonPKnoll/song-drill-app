@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
+	"time"
 
 	"song-drill-backend/srs"
 )
@@ -377,6 +379,83 @@ func TestVocabSessionSummary_PreviouslyGraduatedCardDueTodayIsOld(t *testing.T) 
 	}
 }
 
+// This is the case the frontend's single scheduled timer (replacing a fixed-
+// interval poll) depends on: once the only card is answered and goes into
+// learning with a same-day due time, the queue is momentarily empty and the
+// summary must carry that exact due timestamp so the client knows precisely
+// when to check back instead of guessing.
+func TestVocabDrillQueue_NextDueAtSetWhenQueueEmpty(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, _, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+
+	cards, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("expected an empty queue right after answering the only card (due ~10s out), got %d cards", len(cards))
+	}
+	if summary.NextDueAt == nil {
+		t.Fatal("NextDueAt = nil, want a timestamp for the card due back in ~10s")
+	}
+	dueAt, err := time.Parse(time.RFC3339, *summary.NextDueAt)
+	if err != nil {
+		t.Fatalf("NextDueAt %q is not RFC3339: %v", *summary.NextDueAt, err)
+	}
+	if !dueAt.After(time.Now()) {
+		t.Errorf("NextDueAt = %v, want a time in the future", dueAt)
+	}
+}
+
+// When something is already due right now, it shows up in `cards` instead —
+// NextDueAt is only for "nothing to do yet, but something's coming."
+func TestVocabDrillQueue_NextDueAtNilWhenCardsAreDue(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, _, _ := testSong(t, database)
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.NextDueAt != nil {
+		t.Errorf("NextDueAt = %q, want nil when there's already a card due right now", *summary.NextDueAt)
+	}
+}
+
+// LineDrillQueue's NextDueAt follows the same rule as vocab's.
+func TestLineDrillQueue_NextDueAtSetWhenQueueEmpty(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, _, lineID := testSong(t, database)
+
+	if _, _, err := LineDrillQueue(database, userID, songID, 20); err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if _, err := RecordLineResult(database, userID, lineID, true); err != nil {
+		t.Fatalf("RecordLineResult: %v", err)
+	}
+
+	cards, summary, err := LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if len(cards) != 0 {
+		t.Fatalf("expected an empty queue right after answering the only line (due ~10s out), got %d cards", len(cards))
+	}
+	if summary.NextDueAt == nil {
+		t.Fatal("NextDueAt = nil, want a timestamp for the line due back in ~10s")
+	}
+}
+
 // LineDrillQueue's summary follows the identical New/InProgress/Old model,
 // just over line_progress instead of vocab_progress.
 func TestLineDrillQueue_SummaryTracksNewInProgressOld(t *testing.T) {
@@ -417,6 +496,112 @@ func TestLineDrillQueue_SummaryTracksNewInProgressOld(t *testing.T) {
 	}
 }
 
+// songWithLineCount ingests a minimal song with n distinct content-bearing
+// lines (reading != '') and no vocab — LineDrillQueue's counterpart to
+// songWithVocabCount, for exercising its daily-cap top-up logic.
+func songWithLineCount(t *testing.T, database *sql.DB, n int) int64 {
+	t.Helper()
+	payload := IngestPayload{Song: IngestSongMeta{Title: "Line Cap Test", Artist: "Demo", Language: "ja"}}
+	for i := 0; i < n; i++ {
+		text := fmt.Sprintf("line%d", i)
+		payload.Lines = append(payload.Lines, IngestLine{
+			Position: i, Text: text, Reading: text, Furi: text,
+			Literal: "test", Natural: "test", Contextual: "test",
+		})
+	}
+	songID, err := IngestSong(database, payload)
+	if err != nil {
+		t.Fatalf("IngestSong: %v", err)
+	}
+	return songID
+}
+
+// AtCap is only about IntroducedToday vs NewCap, independent of how those
+// lines got introduced — seed the graduated-and-done state directly rather
+// than looping LineDrillQueue, mirroring TestVocabSessionSummary_AtCapReflectsDailyCap.
+func TestLineSessionSummary_AtCapReflectsDailyCap(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithLineCount(t, database, DailyNewLineCap+2)
+
+	rows, err := database.Query(`SELECT id FROM lines WHERE song_id = ? LIMIT ?`, songID, DailyNewLineCap)
+	if err != nil {
+		t.Fatalf("query line ids: %v", err)
+	}
+	var lineIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan line id: %v", err)
+		}
+		lineIDs = append(lineIDs, id)
+	}
+	rows.Close()
+
+	for _, lineID := range lineIDs {
+		if _, err := database.Exec(`
+			INSERT INTO line_progress (user_id, line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, 'review', 0, 2.5, 5, 0, 3, 3, datetime('now', '+1 day'), datetime('now'), datetime('now'))
+		`, userID, lineID); err != nil {
+			t.Fatalf("seed graduated line: %v", err)
+		}
+	}
+
+	_, summary, err := LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != DailyNewLineCap {
+		t.Fatalf("IntroducedToday = %d, want %d (the daily cap)", summary.IntroducedToday, DailyNewLineCap)
+	}
+	if !summary.AtCap {
+		t.Error("AtCap = false, want true once IntroducedToday reaches NewCap")
+	}
+}
+
+// This mirrors TestVocabDrillQueue_IntroducesOnlyOneNewWordPerCall — lines
+// follow the exact same drip-feed pacing as vocab.
+func TestLineDrillQueue_IntroducesOnlyOneNewLinePerCall(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithLineCount(t, database, DailyNewLineCap+2)
+
+	_, summary, err := LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != NewWordsPerTopUp {
+		t.Errorf("IntroducedToday = %d, want %d (NewWordsPerTopUp) on the very first call", summary.IntroducedToday, NewWordsPerTopUp)
+	}
+	if summary.New != NewWordsPerTopUp {
+		t.Errorf("New = %d, want %d", summary.New, NewWordsPerTopUp)
+	}
+}
+
+// This mirrors TestVocabDrillQueue_StopsIntroducingOnceWorkingSetIsFull.
+func TestLineDrillQueue_StopsIntroducingOnceWorkingSetIsFull(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithLineCount(t, database, DailyNewLineCap+2)
+
+	for i := 0; i < WorkingSetLimit+3; i++ {
+		if _, _, err := LineDrillQueue(database, userID, songID, 20); err != nil {
+			t.Fatalf("LineDrillQueue: %v", err)
+		}
+	}
+
+	_, summary, err := LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != WorkingSetLimit {
+		t.Errorf("IntroducedToday = %d, want %d (WorkingSetLimit) — should stop there even with daily allowance left", summary.IntroducedToday, WorkingSetLimit)
+	}
+	if summary.New != WorkingSetLimit {
+		t.Errorf("New = %d, want %d", summary.New, WorkingSetLimit)
+	}
+}
+
 func TestListVocabProgress_DefaultsUntouchedWordsToNew(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
@@ -441,6 +626,224 @@ func TestListVocabProgress_DefaultsUntouchedWordsToNew(t *testing.T) {
 	}
 	if item.Mastered {
 		t.Error("Mastered = true, want false for a brand-new word")
+	}
+}
+
+// songWithVocabCount ingests a minimal song with n distinct vocab words and
+// no real lines — enough to exercise the daily new-word cap's top-up logic
+// without depending on real Japanese content or a full line/word ingest.
+func songWithVocabCount(t *testing.T, database *sql.DB, n int) int64 {
+	t.Helper()
+	payload := IngestPayload{Song: IngestSongMeta{Title: "Cap Test", Artist: "Demo", Language: "ja"}}
+	for i := 0; i < n; i++ {
+		surface := fmt.Sprintf("word%d", i)
+		payload.Vocab = append(payload.Vocab, IngestVocabRow{
+			Surface: surface, Reading: surface, Furi: surface, POS: "noun",
+			BaseMeaning: "test word", ContextMeaning: "test word", FirstLinePosition: 0,
+		})
+	}
+	songID, err := IngestSong(database, payload)
+	if err != nil {
+		t.Fatalf("IngestSong: %v", err)
+	}
+	return songID
+}
+
+// This is the frontend's `atCap` derivation, moved server-side — the
+// backend already knows DailyNewWordCap, so it should just say outright
+// whether today's budget is used up rather than handing back two raw
+// numbers for the client to compare itself.
+// AtCap is only about IntroducedToday vs NewCap, independent of how those
+// words got introduced — seed the graduated-and-done state directly rather
+// than looping VocabDrillQueue, since WorkingSetLimit now paces real
+// introduction to far fewer than DailyNewWordCap per call (see the
+// WorkingSetLimit tests below).
+func TestVocabSessionSummary_AtCapReflectsDailyCap(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithVocabCount(t, database, DailyNewWordCap+2)
+
+	rows, err := database.Query(`SELECT vocab_id FROM song_vocab WHERE song_id = ? LIMIT ?`, songID, DailyNewWordCap)
+	if err != nil {
+		t.Fatalf("query vocab ids: %v", err)
+	}
+	var vocabIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan vocab id: %v", err)
+		}
+		vocabIDs = append(vocabIDs, id)
+	}
+	rows.Close()
+
+	for _, vocabID := range vocabIDs {
+		if _, err := database.Exec(`
+			INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, ?, 'review', 0, 2.5, 5, 0, 3, 3, datetime('now', '+1 day'), datetime('now'), datetime('now'))
+		`, userID, songID, vocabID); err != nil {
+			t.Fatalf("seed graduated word: %v", err)
+		}
+	}
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != DailyNewWordCap {
+		t.Fatalf("IntroducedToday = %d, want %d (the daily cap)", summary.IntroducedToday, DailyNewWordCap)
+	}
+	if !summary.AtCap {
+		t.Error("AtCap = false, want true once IntroducedToday reaches NewCap")
+	}
+}
+
+// This is the exact behavior the user reported as overwhelming: starting
+// fresh with a big pool of vocab must not dump the whole daily allowance
+// into the working set at once — only NewWordsPerTopUp per call.
+func TestVocabDrillQueue_IntroducesOnlyOneNewWordPerCall(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithVocabCount(t, database, DailyNewWordCap+2)
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != NewWordsPerTopUp {
+		t.Errorf("IntroducedToday = %d, want %d (NewWordsPerTopUp) on the very first call", summary.IntroducedToday, NewWordsPerTopUp)
+	}
+	if summary.New != NewWordsPerTopUp {
+		t.Errorf("New = %d, want %d", summary.New, NewWordsPerTopUp)
+	}
+}
+
+// Once WorkingSetLimit words are sitting untouched in the rotation, further
+// calls must not introduce more — even though DailyNewWordCap has plenty of
+// room left — until some of them graduate out and free up space.
+func TestVocabDrillQueue_StopsIntroducingOnceWorkingSetIsFull(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID := songWithVocabCount(t, database, DailyNewWordCap+2)
+
+	for i := 0; i < WorkingSetLimit+3; i++ {
+		if _, _, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
+			t.Fatalf("VocabDrillQueue: %v", err)
+		}
+	}
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.IntroducedToday != WorkingSetLimit {
+		t.Errorf("IntroducedToday = %d, want %d (WorkingSetLimit) — should stop there even with daily allowance left", summary.IntroducedToday, WorkingSetLimit)
+	}
+	if summary.New != WorkingSetLimit {
+		t.Errorf("New = %d, want %d", summary.New, WorkingSetLimit)
+	}
+}
+
+func TestVocabSessionSummary_AtCapFalseBelowDailyCap(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, _, _ := testSong(t, database)
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.AtCap {
+		t.Error("AtCap = true, want false when only one word has been introduced today")
+	}
+}
+
+// This is the frontend's stats-page `bucket()` classifier, moved
+// server-side: the same new/progress/done/burned categories, computed once
+// alongside Mastered instead of re-derived from State/Mastered on the client.
+func TestListVocabProgress_BucketReflectsState(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	items, err := ListVocabProgress(database, userID, songID)
+	if err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].Bucket != "new" {
+		t.Errorf("Bucket = %q, want %q for an untouched word", items[0].Bucket, "new")
+	}
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+	if items, err = ListVocabProgress(database, userID, songID); err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].Bucket != "progress" {
+		t.Errorf("Bucket = %q, want %q for a card mid-learning", items[0].Bucket, "progress")
+	}
+
+	for i := 0; i < len(srs.LearningSteps); i++ {
+		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+			t.Fatalf("RecordVocabResult: %v", err)
+		}
+	}
+	if items, err = ListVocabProgress(database, userID, songID); err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].Bucket != "done" {
+		t.Errorf("Bucket = %q, want %q for a graduated card below the mastered interval", items[0].Bucket, "done")
+	}
+
+	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+		t.Fatalf("BurnVocabProgress: %v", err)
+	}
+	if items, err = ListVocabProgress(database, userID, songID); err != nil {
+		t.Fatalf("ListVocabProgress: %v", err)
+	}
+	if items[0].Bucket != "burned" {
+		t.Errorf("Bucket = %q, want %q for a manually-burned word", items[0].Bucket, "burned")
+	}
+}
+
+// This is the frontend's SongCard `fullyMastered` derivation, moved
+// server-side.
+func TestListSongs_FullyMasteredReflectsAllVocabMastered(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	summaries, err := ListSongs(database, userID)
+	if err != nil {
+		t.Fatalf("ListSongs: %v", err)
+	}
+	var before SongSummary
+	for _, s := range summaries {
+		if s.ID == songID {
+			before = s
+		}
+	}
+	if before.FullyMastered {
+		t.Error("FullyMastered = true, want false before any word is mastered")
+	}
+
+	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+		t.Fatalf("BurnVocabProgress: %v", err)
+	}
+
+	summaries, err = ListSongs(database, userID)
+	if err != nil {
+		t.Fatalf("ListSongs: %v", err)
+	}
+	var after SongSummary
+	for _, s := range summaries {
+		if s.ID == songID {
+			after = s
+		}
+	}
+	if !after.FullyMastered {
+		t.Error("FullyMastered = false, want true once every word in the song is mastered")
 	}
 }
 

@@ -1,7 +1,14 @@
 import type { PageLoad } from './$types';
 import { getLineDrillQueue, type LineCard, type LineSessionSummary } from '$lib/api';
 
-const emptySummary: LineSessionSummary = { new: 0, in_progress: 0, old: 0 };
+const emptySummary: LineSessionSummary = {
+	new: 0,
+	in_progress: 0,
+	old: 0,
+	introduced_today: 0,
+	new_cap: 0,
+	at_cap: false
+};
 
 export const load: PageLoad = async ({ url, fetch }) => {
 	const songIdParam = url.searchParams.get('song_id');

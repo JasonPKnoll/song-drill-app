@@ -100,5 +100,6 @@ CREATE TABLE IF NOT EXISTS line_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen     TEXT,
+    introduced_at TEXT,                                   -- when this line was assigned into a daily new-line batch (nullable; see LineDrillQueue's daily cap)
     UNIQUE(user_id, line_id)
 );

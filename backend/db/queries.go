@@ -20,6 +20,31 @@ const sqliteDatetimeLayout = "2006-01-02 15:04:05"
 // schema.md. IntroduceMoreVocab bypasses this on request.
 const DailyNewWordCap = 10
 
+// DailyNewLineCap is DailyNewWordCap's line-drill counterpart — see
+// LineDrillQueue.
+const DailyNewLineCap = 10
+
+// WorkingSetLimit caps how many cards (vocab words or lines — shared by
+// both VocabDrillQueue and LineDrillQueue) can be simultaneously "in
+// rotation" — state new, learning, or relearning, i.e. not yet graduated
+// to review — for one profile+song. Without this, introducing a whole
+// day's new-card cohort at once (or a big batch of lapsed reviews) floods
+// the session with many cards all coming due within the same 10s/30s/2m
+// window. Anki avoids the same problem by surfacing due reviews first and
+// trickling new cards in gradually rather than all at once; ORDER BY due
+// ASC already gives us the first half for free (a real backlog's due date
+// is always earlier than a card just introduced), and NewWordsPerTopUp
+// below gives us the second half.
+const WorkingSetLimit = 8
+
+// NewWordsPerTopUp is how many brand-new cards VocabDrillQueue/
+// LineDrillQueue each introduce per call when there's room under
+// WorkingSetLimit — deliberately small rather than "fill all remaining
+// room at once," so new cards drip into the working set one at a time
+// across a session instead of arriving in a single burst the moment the
+// working set has any room at all.
+const NewWordsPerTopUp = 1
+
 // vocabDBTX is satisfied by both *sql.DB and *sql.Tx, so the daily-cap
 // helpers below can run either inside VocabDrillQueue's transaction or
 // standalone from IntroduceMoreVocab.
@@ -245,6 +270,7 @@ func ListSongs(database *sql.DB, userID int64) ([]SongSummary, error) {
 		if notes.Valid {
 			s.Notes = &notes.String
 		}
+		s.FullyMastered = s.VocabCount > 0 && s.MasteredCount == s.VocabCount
 		summaries = append(summaries, s)
 	}
 	return summaries, rows.Err()
@@ -390,6 +416,21 @@ func introducedTodayCount(tx vocabDBTX, userID, songID int64) (int, error) {
 	return n, err
 }
 
+// activeRotationCount returns how many words are currently "in rotation" —
+// state new, learning, or relearning, i.e. not yet graduated to review —
+// for one profile+song. VocabDrillQueue gates new-word top-up against
+// WorkingSetLimit using this, so a big batch of lapsed reviews already
+// occupying the rotation holds off new introductions just as much as a
+// batch of not-yet-graduated new words would.
+func activeRotationCount(tx vocabDBTX, userID, songID int64) (int, error) {
+	var n int
+	err := tx.QueryRow(
+		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND state IN ('new', 'learning', 'relearning')`,
+		userID, songID,
+	).Scan(&n)
+	return n, err
+}
+
 // introduceNewVocab eagerly creates up to `count` fresh vocab_progress rows
 // (state 'new', due now, introduced_at now) for words this profile has
 // never seen before, so a page refresh doesn't roll a different random set
@@ -442,6 +483,124 @@ func introduceNewVocab(tx vocabDBTX, userID, songID int64, count int, now time.T
 	return nil
 }
 
+// vocabNextDueAt returns the earliest still-in-the-future due timestamp
+// across this profile+song's vocab_progress rows (RFC 3339), or nil if
+// nothing is scheduled to become due later — see VocabSessionSummary.NextDueAt.
+// Only meaningful (and only called) when the current batch of cards is
+// empty: anything already due would be in that batch instead.
+func vocabNextDueAt(tx vocabDBTX, userID, songID int64) (*string, error) {
+	var dueStr sql.NullString
+	if err := tx.QueryRow(
+		`SELECT MIN(due) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND due > datetime('now')`,
+		userID, songID,
+	).Scan(&dueStr); err != nil {
+		return nil, err
+	}
+	if !dueStr.Valid {
+		return nil, nil
+	}
+	t, err := parseDue(dueStr.String)
+	if err != nil {
+		return nil, err
+	}
+	iso := t.Format(time.RFC3339)
+	return &iso, nil
+}
+
+// lineNextDueAt is vocabNextDueAt's line-drill counterpart.
+func lineNextDueAt(tx vocabDBTX, userID, songID int64) (*string, error) {
+	var dueStr sql.NullString
+	if err := tx.QueryRow(
+		`SELECT MIN(lp.due) FROM line_progress lp
+		 JOIN lines l ON l.id = lp.line_id
+		 WHERE lp.user_id = ? AND l.song_id = ? AND lp.due > datetime('now')`,
+		userID, songID,
+	).Scan(&dueStr); err != nil {
+		return nil, err
+	}
+	if !dueStr.Valid {
+		return nil, nil
+	}
+	t, err := parseDue(dueStr.String)
+	if err != nil {
+		return nil, err
+	}
+	iso := t.Format(time.RFC3339)
+	return &iso, nil
+}
+
+// linesIntroducedTodayCount is introducedTodayCount's line-drill
+// counterpart.
+func linesIntroducedTodayCount(tx vocabDBTX, userID, songID int64) (int, error) {
+	var n int
+	err := tx.QueryRow(
+		`SELECT COUNT(*) FROM line_progress lp
+		 JOIN lines l ON l.id = lp.line_id
+		 WHERE lp.user_id = ? AND l.song_id = ? AND date(lp.introduced_at) = date('now')`,
+		userID, songID,
+	).Scan(&n)
+	return n, err
+}
+
+// lineActiveRotationCount is activeRotationCount's line-drill counterpart.
+func lineActiveRotationCount(tx vocabDBTX, userID, songID int64) (int, error) {
+	var n int
+	err := tx.QueryRow(
+		`SELECT COUNT(*) FROM line_progress lp
+		 JOIN lines l ON l.id = lp.line_id
+		 WHERE lp.user_id = ? AND l.song_id = ? AND lp.state IN ('new', 'learning', 'relearning')`,
+		userID, songID,
+	).Scan(&n)
+	return n, err
+}
+
+// introduceNewLines is introduceNewVocab's line-drill counterpart: eagerly
+// creates up to `count` fresh line_progress rows (state 'new', due now,
+// introduced_at now) for content-bearing lines (reading != '' — scraped
+// page noise with nothing to quiz is never a candidate) this profile has
+// never seen before.
+func introduceNewLines(tx vocabDBTX, userID, songID int64, count int, now time.Time) error {
+	if count <= 0 {
+		return nil
+	}
+	rows, err := tx.Query(`
+		SELECT l.id
+		FROM lines l
+		LEFT JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
+		WHERE lp.id IS NULL AND l.song_id = ? AND l.reading != ''
+		ORDER BY l.position ASC
+		LIMIT ?
+	`, userID, songID, count)
+	if err != nil {
+		return err
+	}
+	var lineIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		lineIDs = append(lineIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	nowStr := formatDue(now)
+	for _, lineID := range lineIDs {
+		if _, err := tx.Exec(`
+			INSERT INTO line_progress (user_id, line_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, 'new', 0, ?, 0, 0, 0, 0, ?, NULL, ?)
+		`, userID, lineID, srs.StartingEase, nowStr, nowStr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // vocabSessionSummary splits this profile's vocab_progress rows for one song
 // into three live buckets — New (never attempted), InProgress (mid-cycle,
 // due back around same-day), and Old (review backlog due today, from a
@@ -479,6 +638,7 @@ func vocabSessionSummary(tx vocabDBTX, userID, songID int64) (VocabSessionSummar
 	).Scan(&sum.Old); err != nil {
 		return sum, err
 	}
+	sum.AtCap = sum.IntroducedToday >= sum.NewCap
 	return sum, nil
 }
 
@@ -522,8 +682,19 @@ func VocabDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]Vocab
 		return nil, VocabSessionSummary{}, err
 	}
 	if remaining := DailyNewWordCap - introducedToday; remaining > 0 {
-		if err := introduceNewVocab(tx, userID, songID, remaining, now); err != nil {
+		active, err := activeRotationCount(tx, userID, songID)
+		if err != nil {
 			return nil, VocabSessionSummary{}, err
+		}
+		// Gated by whichever is smallest: the daily allowance left, the room
+		// still open under WorkingSetLimit, and NewWordsPerTopUp itself — so
+		// a big open daily allowance never overrides the working-set cap,
+		// and even a wide-open working set only ever gets one new word per
+		// call rather than a burst.
+		if toIntroduce := min(remaining, WorkingSetLimit-active, NewWordsPerTopUp); toIntroduce > 0 {
+			if err := introduceNewVocab(tx, userID, songID, toIntroduce, now); err != nil {
+				return nil, VocabSessionSummary{}, err
+			}
 		}
 	}
 
@@ -595,6 +766,12 @@ func VocabDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]Vocab
 		return nil, VocabSessionSummary{}, err
 	}
 
+	if len(cards) == 0 {
+		if summary.NextDueAt, err = vocabNextDueAt(tx, userID, songID); err != nil {
+			return nil, VocabSessionSummary{}, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, VocabSessionSummary{}, err
 	}
@@ -608,11 +785,19 @@ func VocabDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]Vocab
 // line_progress row at all reads as New via COALESCE, matching the drill
 // query's own convention below.
 func lineSessionSummary(tx vocabDBTX, userID, songID int64) (LineSessionSummary, error) {
-	var sum LineSessionSummary
+	sum := LineSessionSummary{NewCap: DailyNewLineCap}
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM lines l
-		 LEFT JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
-		 WHERE l.song_id = ? AND l.reading != '' AND COALESCE(lp.state, 'new') = 'new'`,
+		`SELECT COUNT(*) FROM line_progress lp
+		 JOIN lines l ON l.id = lp.line_id
+		 WHERE lp.user_id = ? AND l.song_id = ? AND date(lp.introduced_at) = date('now')`,
+		userID, songID,
+	).Scan(&sum.IntroducedToday); err != nil {
+		return sum, err
+	}
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM line_progress lp
+		 JOIN lines l ON l.id = lp.line_id
+		 WHERE lp.user_id = ? AND l.song_id = ? AND lp.state = 'new'`,
 		userID, songID,
 	).Scan(&sum.New); err != nil {
 		return sum, err
@@ -633,20 +818,65 @@ func lineSessionSummary(tx vocabDBTX, userID, songID int64) (LineSessionSummary,
 	).Scan(&sum.Old); err != nil {
 		return sum, err
 	}
+	sum.AtCap = sum.IntroducedToday >= sum.NewCap
 	return sum, nil
+}
+
+// IntroduceMoreLines is IntroduceMoreVocab's line-drill counterpart.
+func IntroduceMoreLines(database *sql.DB, userID, songID int64, count int) (LineSessionSummary, error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return LineSessionSummary{}, err
+	}
+	defer tx.Rollback()
+
+	if err := introduceNewLines(tx, userID, songID, count, time.Now()); err != nil {
+		return LineSessionSummary{}, err
+	}
+	summary, err := lineSessionSummary(tx, userID, songID)
+	if err != nil {
+		return LineSessionSummary{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return LineSessionSummary{}, err
+	}
+	return summary, nil
 }
 
 // LineDrillQueue returns due line cards for the given profile within one
 // song, earliest due first, alongside the same New/InProgress/Old summary
-// vocab drilling uses. Content-less lines (e.g. scraped page noise with no
-// reading/translation) are excluded — there's nothing to quiz — even though
-// they're still ingested and shown in the reader.
+// vocab drilling uses. Before selecting, tops up today's new-line cohort
+// the same way VocabDrillQueue does — up to DailyNewLineCap overall, but
+// gated by WorkingSetLimit/NewWordsPerTopUp so new lines drip in one at a
+// time instead of flooding the session (see those constants' comments).
+// Content-less lines (e.g. scraped page noise with no reading/translation)
+// are excluded — there's nothing to quiz — even though they're still
+// ingested and shown in the reader.
 func LineDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]LineCard, LineSessionSummary, error) {
 	tx, err := database.Begin()
 	if err != nil {
 		return nil, LineSessionSummary{}, err
 	}
 	defer tx.Rollback()
+
+	now := time.Now()
+	introducedToday, err := linesIntroducedTodayCount(tx, userID, songID)
+	if err != nil {
+		return nil, LineSessionSummary{}, err
+	}
+	if remaining := DailyNewLineCap - introducedToday; remaining > 0 {
+		active, err := lineActiveRotationCount(tx, userID, songID)
+		if err != nil {
+			return nil, LineSessionSummary{}, err
+		}
+		// Same three-way gate as VocabDrillQueue: daily allowance left, room
+		// under WorkingSetLimit, and NewWordsPerTopUp — see its comment.
+		if toIntroduce := min(remaining, WorkingSetLimit-active, NewWordsPerTopUp); toIntroduce > 0 {
+			if err := introduceNewLines(tx, userID, songID, toIntroduce, now); err != nil {
+				return nil, LineSessionSummary{}, err
+			}
+		}
+	}
 
 	summary, err := lineSessionSummary(tx, userID, songID)
 	if err != nil {
@@ -655,15 +885,18 @@ func LineDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]LineCa
 
 	query := `
 		SELECT l.id, l.song_id, s.title, l.text, l.furi, l.natural, l.grammar_note,
-			COALESCE(lp.state, 'new'), COALESCE(lp.due, datetime('now'))
+			lp.state, lp.due
 		FROM lines l
 		JOIN songs s ON s.id = l.song_id
-		LEFT JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
-		WHERE l.reading != '' AND l.song_id = ?
-		AND (lp.due IS NULL OR lp.due <= datetime('now'))
+		JOIN line_progress lp ON lp.line_id = l.id AND lp.user_id = ?
+		WHERE l.reading != '' AND l.song_id = ? AND lp.due <= datetime('now')
 	`
+	// line_progress is now an inner join, not left — a line with no progress
+	// row at all means it's beyond today's cap (introduceNewLines above is
+	// the only thing that creates rows for never-seen lines), so it must
+	// not leak into the queue. Same reasoning as VocabDrillQueue's join.
 	args := []any{userID, songID}
-	query += " ORDER BY COALESCE(lp.due, datetime('now')) ASC, l.position ASC LIMIT ?"
+	query += " ORDER BY lp.due ASC, l.position ASC LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := tx.Query(query, args...)
@@ -686,6 +919,12 @@ func LineDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]LineCa
 	}
 	if err := rows.Err(); err != nil {
 		return nil, LineSessionSummary{}, err
+	}
+
+	if len(cards) == 0 {
+		if summary.NextDueAt, err = lineNextDueAt(tx, userID, songID); err != nil {
+			return nil, LineSessionSummary{}, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -838,9 +1077,26 @@ func ListVocabProgress(database *sql.DB, userID, songID int64) ([]VocabProgressI
 			it.LastSeen = &lastSeen.String
 		}
 		it.Mastered = it.State == string(srs.StageReview) && it.IntervalDays >= srs.MasteredIntervalDays
+		it.Bucket = vocabProgressBucket(it.State, it.Mastered)
 		items = append(items, it)
 	}
 	return items, rows.Err()
+}
+
+// vocabProgressBucket is the stats sheet's at-a-glance category for one
+// word: mastered wins outright regardless of stage, new/review map
+// directly, and anything still learning/relearning is "progress".
+func vocabProgressBucket(state string, mastered bool) string {
+	switch {
+	case mastered:
+		return "burned"
+	case state == string(srs.StageNew):
+		return "new"
+	case state == string(srs.StageReview):
+		return "done"
+	default:
+		return "progress"
+	}
 }
 
 // BurnVocabProgress manually flags a word as already known, per

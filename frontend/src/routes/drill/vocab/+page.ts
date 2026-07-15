@@ -6,7 +6,8 @@ const emptySummary: VocabSessionSummary = {
 	in_progress: 0,
 	old: 0,
 	introduced_today: 0,
-	new_cap: 0
+	new_cap: 0,
+	at_cap: false
 };
 
 export const load: PageLoad = async ({ url, fetch }) => {

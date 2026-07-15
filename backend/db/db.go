@@ -12,9 +12,18 @@ import (
 var schemaSQL string
 
 // Open opens (creating if necessary) the SQLite database at path and applies
-// the schema. Foreign keys are enabled since the DDL relies on ON DELETE CASCADE.
+// the schema. Foreign keys are enabled since the DDL relies on ON DELETE
+// CASCADE. WAL journal mode lets readers proceed without waiting on a
+// writer (the default rollback-journal mode locks the whole database file
+// for the duration of a write transaction); busy_timeout makes a writer
+// that does have to wait for another writer retry for up to 5s instead of
+// failing (or, without a timeout at all, appearing to hang indefinitely
+// from the caller's perspective) the instant it hits SQLITE_BUSY. Without
+// both of these, concurrent requests — this app's own empty-queue refresh
+// timer landing at the same moment as a page navigation, for example — can
+// stall each other out long enough to trip the frontend's request timeout.
 func Open(path string) (*sql.DB, error) {
-	database, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
+	database, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -83,6 +92,7 @@ func migrate(database *sql.DB) error {
 	}{
 		{"lines", "section", `ALTER TABLE lines ADD COLUMN section TEXT`},
 		{"vocab_progress", "introduced_at", `ALTER TABLE vocab_progress ADD COLUMN introduced_at TEXT`},
+		{"line_progress", "introduced_at", `ALTER TABLE line_progress ADD COLUMN introduced_at TEXT`},
 	}
 
 	for _, m := range columnMigrations {
