@@ -16,10 +16,11 @@
 
 	let queue = $state<VocabCard[]>([]);
 	let summary = $state<VocabSessionSummary>({
-		new_today: 0,
-		new_cap: 0,
-		in_progress_today: 0,
-		completed_today: 0
+		new: 0,
+		in_progress: 0,
+		old: 0,
+		introduced_today: 0,
+		new_cap: 0
 	});
 	let actionError = $state<string | null>(null);
 	let addingMore = $state(false);
@@ -37,6 +38,7 @@
 	// every answer, so a newly-due card can surface as soon as the very next
 	// fetch reflects it, not just once the whole local batch is drained.
 	async function refresh() {
+		if (data.songId === undefined) return;
 		try {
 			const result = await getVocabDrillQueue(data.songId);
 			queue = result.cards;
@@ -59,14 +61,7 @@
 	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
 	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
 	let current = $derived(queue[0] ?? null);
-	// Today's introduced cohort, split the same way the old client-side
-	// bookkeeping used to (new / in-progress / done) — but derived from the
-	// server's per-day counts, so it doesn't reset just because the page
-	// reloaded or the local queue emptied out.
-	let notStartedToday = $derived(
-		Math.max(0, summary.new_today - summary.in_progress_today - summary.completed_today)
-	);
-	let atCap = $derived(summary.new_today >= summary.new_cap);
+	let atCap = $derived(summary.introduced_today >= summary.new_cap);
 
 	async function answer(correct: boolean) {
 		if (!current) return;
@@ -87,9 +82,10 @@
 	}
 
 	async function handleAddMore() {
+		if (data.songId === undefined) return;
 		addingMore = true;
 		try {
-			await addMoreVocab();
+			await addMoreVocab(data.songId);
 			actionError = null;
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
@@ -101,44 +97,44 @@
 
 <BackLink href={backHref} label={backLabel} />
 
-<div class="mb-2 flex items-center justify-between">
-	<h1 class="text-2xl font-semibold text-ink">Vocab Drill</h1>
-	<div
-		class="flex items-center gap-3"
-		title="{notStartedToday} new · {summary.in_progress_today} in progress · {summary.completed_today} done today"
-	>
-		<span class="flex items-center gap-1.5">
-			<span class="h-2 w-2 rounded-full bg-new"></span>
-			<span class="text-sm text-muted tabular-nums">{notStartedToday}</span>
-		</span>
-		<span class="flex items-center gap-1.5">
-			<span class="h-2 w-2 rounded-full bg-accent"></span>
-			<span class="text-sm text-muted tabular-nums">{summary.in_progress_today}</span>
-		</span>
-		<span class="flex items-center gap-1.5">
-			<span class="h-2 w-2 rounded-full bg-good"></span>
-			<span class="text-sm text-muted tabular-nums">{summary.completed_today}</span>
-		</span>
-	</div>
-</div>
+<h1 class="mb-2 text-2xl font-semibold text-ink">Vocab Drill</h1>
 
-<div class="mb-6 flex items-center justify-between">
-	<p class="text-sm text-muted tabular-nums">
-		{summary.new_today}/{summary.new_cap} new words introduced today
-	</p>
-	<button
-		type="button"
-		disabled={addingMore}
-		onclick={handleAddMore}
-		class={cn(
-			'text-sm font-medium text-accent',
-			'transition hover:opacity-80 disabled:opacity-50',
-			'no-focus-ring'
-		)}
+{#if !data.error}
+	<div
+		class="mb-2 flex items-center justify-between"
+		title="{summary.new} new · {summary.in_progress} in progress · {summary.old} from previous days"
 	>
-		{addingMore ? 'Adding…' : '+ Add 5 more'}
-	</button>
-</div>
+		<div class="flex items-center gap-3">
+			<span class="flex items-center gap-1.5">
+				<span class="h-2 w-2 rounded-full bg-new"></span>
+				<span class="text-sm text-muted tabular-nums">{summary.new}</span>
+			</span>
+			<span class="flex items-center gap-1.5">
+				<span class="h-2 w-2 rounded-full bg-accent"></span>
+				<span class="text-sm text-muted tabular-nums">{summary.in_progress}</span>
+			</span>
+			<span class="flex items-center gap-1.5">
+				<span class="h-2 w-2 rounded-full bg-good"></span>
+				<span class="text-sm text-muted tabular-nums">{summary.old}</span>
+			</span>
+		</div>
+	</div>
+
+	<div class="mb-6 flex items-center justify-end">
+		<button
+			type="button"
+			disabled={addingMore}
+			onclick={handleAddMore}
+			class={cn(
+				'text-sm font-medium text-accent',
+				'transition hover:opacity-80 disabled:opacity-50',
+				'no-focus-ring'
+			)}
+		>
+			{addingMore ? 'Adding…' : '+ Add 5 more'}
+		</button>
+	</div>
+{/if}
 
 {#if data.error}
 	<p class="text-bad">{data.error}</p>
@@ -151,10 +147,10 @@
 			'rounded-2xl'
 		)}
 	>
-		{#if summary.in_progress_today > 0}
+		{#if summary.in_progress > 0}
 			Nothing due right now — in-progress words will come back around shortly.
 		{:else if atCap}
-			All {summary.new_cap} of today's words are done. Nice work.
+			All caught up — today's {summary.new_cap} new words are underway. Nice work.
 		{:else}
 			Nothing due right now. Nice work.
 		{/if}

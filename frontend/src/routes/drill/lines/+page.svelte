@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import { recordLineResult, type LineCard } from '$lib/api';
+	import { recordLineResult, getLineDrillQueue, type LineCard, type LineSessionSummary } from '$lib/api';
 	import DrillCard from '$lib/components/DrillCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
@@ -9,55 +9,59 @@
 	let { data }: { data: PageData } = $props();
 
 	let queue = $state<LineCard[]>([]);
-	let done = $state(0);
-	// line_ids that have been answered at least once this session — lets the
-	// "left" count split into "new" (never touched yet) vs "in progress" (still
-	// in rotation because it hasn't graduated, whether from a miss or just not
-	// enough correct reps yet), Anki-style.
-	let attemptedIds = $state<Set<number>>(new Set());
+	let summary = $state<LineSessionSummary>({ new: 0, in_progress: 0, old: 0 });
 	let actionError = $state<string | null>(null);
 
 	$effect(() => {
 		queue = data.queue;
-		done = 0;
-		attemptedIds = new Set();
+		summary = data.summary;
 		actionError = null;
 	});
 
+	// Re-fetches the small due batch + live summary from the server — the
+	// source of truth for "what's due right now," same pattern as the vocab
+	// drill page. Called right after every answer, so a newly-due card can
+	// surface as soon as the very next fetch reflects it.
+	async function refresh() {
+		if (data.songId === undefined) return;
+		try {
+			const result = await getLineDrillQueue(data.songId, 20);
+			queue = result.cards;
+			summary = result.summary;
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	// While there's nothing to show, keep checking — lets an in-progress line
+	// (due again in 10s/30s/2m) reappear on its own once its time is near.
+	$effect(() => {
+		const id = setInterval(() => {
+			if (queue.length === 0) refresh();
+		}, 2500);
+		return () => clearInterval(id);
+	});
+
 	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
-	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
+	let backLabel = 'Back to song';
 	let current = $derived(queue[0] ?? null);
-	let newCount = $derived(queue.filter((c) => !attemptedIds.has(c.line_id)).length);
-	let inProgressCount = $derived(queue.length - newCount);
 
 	async function answer(correct: boolean) {
 		if (!current) return;
 		const card = current;
-		const wasAlreadyAttempted = attemptedIds.has(card.line_id);
-		attemptedIds = new Set(attemptedIds).add(card.line_id);
 		queue = queue.slice(1);
 		try {
-			const result = await recordLineResult(card.line_id, correct);
-			// Still mid-way through today's learning/relearning steps (e.g. a
-			// miss resets it, or a pass hasn't graduated it yet) — keep it in
-			// this session's rotation instead of counting it done.
-			if (result.state === 'learning' || result.state === 'relearning') {
-				queue = [...queue, card];
-			} else {
-				done += 1;
-			}
+			await recordLineResult(card.line_id, correct);
+			actionError = null;
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
 			// The server never recorded this attempt (request failed) — put the
-			// card back at the front instead of letting it vanish from the
-			// session's counts with no state change actually having happened.
-			if (!wasAlreadyAttempted) {
-				const reverted = new Set(attemptedIds);
-				reverted.delete(card.line_id);
-				attemptedIds = reverted;
-			}
+			// card back at the front instead of letting it silently vanish from
+			// the session with no state change actually having happened.
 			queue = [card, ...queue];
+			return;
 		}
+		await refresh();
 	}
 </script>
 
@@ -65,18 +69,21 @@
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Line Drill</h1>
-	<div class="flex items-center gap-3" title="{newCount} new · {inProgressCount} in progress · {done} done">
+	<div
+		class="flex items-center gap-3"
+		title="{summary.new} new · {summary.in_progress} in progress · {summary.old} from previous days"
+	>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-new"></span>
-			<span class="text-sm text-muted tabular-nums">{newCount}</span>
+			<span class="text-sm text-muted tabular-nums">{summary.new}</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-accent"></span>
-			<span class="text-sm text-muted tabular-nums">{inProgressCount}</span>
+			<span class="text-sm text-muted tabular-nums">{summary.in_progress}</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-good"></span>
-			<span class="text-sm text-muted tabular-nums">{done}</span>
+			<span class="text-sm text-muted tabular-nums">{summary.old}</span>
 		</span>
 	</div>
 </div>
@@ -92,7 +99,11 @@
 			'rounded-2xl'
 		)}
 	>
-		Nothing due right now. Nice work.
+		{#if summary.in_progress > 0}
+			Nothing due right now — in-progress lines will come back around shortly.
+		{:else}
+			Nothing due right now. Nice work.
+		{/if}
 	</div>
 {:else}
 	{#key current.line_id}

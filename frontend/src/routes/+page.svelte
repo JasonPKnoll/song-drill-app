@@ -5,27 +5,11 @@
 	import { cn } from '$lib/utils/cn';
 
 	let { data }: { data: PageData } = $props();
-
-	const drillLinkClass = cn(
-		'px-4 py-2',
-		'text-sm font-medium',
-		'border border-accent/50 bg-accent/10 text-accent',
-		'rounded-xl transition hover:bg-accent/20'
-	);
 </script>
 
 <div class="mb-6 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Song Library</h1>
-	<div class="flex items-center gap-3">
-		{#if data.songs.length > 0}
-			<div class="flex gap-2">
-				<a href="/drill/vocab" class={drillLinkClass}>Drill all vocab</a>
-				<a href="/drill/lines" class={drillLinkClass}>Drill all lines</a>
-				<a href="/stats" class={drillLinkClass}>Progress</a>
-			</div>
-		{/if}
-		<ProfileSwitcher />
-	</div>
+	<ProfileSwitcher />
 </div>
 
 {#if data.error}

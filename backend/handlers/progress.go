@@ -9,17 +9,13 @@ import (
 
 // GET /api/song-drill/progress/vocab?song_id=
 func (e *Env) ListVocabProgress(w http.ResponseWriter, r *http.Request) {
-	songID, ok, err := parseOptionalSongID(r)
+	songID, err := parseRequiredSongID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var songIDPtr *int64
-	if ok {
-		songIDPtr = &songID
-	}
 
-	items, err := db.ListVocabProgress(e.DB, userIDFromContext(r.Context()), songIDPtr)
+	items, err := db.ListVocabProgress(e.DB, userIDFromContext(r.Context()), songID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

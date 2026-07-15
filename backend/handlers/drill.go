@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -10,21 +11,18 @@ import (
 
 const defaultDrillLimit = 20
 
+var errMissingSongID = errors.New("song_id is required")
+
 // GET /api/song-drill/drill/vocab?song_id=&limit=
 func (e *Env) VocabDrillQueue(w http.ResponseWriter, r *http.Request) {
-	songID, ok, err := parseOptionalSongID(r)
+	songID, err := parseRequiredSongID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	limit := parseLimit(r, defaultDrillLimit)
 
-	var songIDPtr *int64
-	if ok {
-		songIDPtr = &songID
-	}
-
-	cards, summary, err := db.VocabDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
+	cards, summary, err := db.VocabDrillQueue(e.DB, userIDFromContext(r.Context()), songID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -34,8 +32,8 @@ func (e *Env) VocabDrillQueue(w http.ResponseWriter, r *http.Request) {
 
 // addMoreVocabRequest is the body of POST /api/song-drill/drill/vocab/more.
 type addMoreVocabRequest struct {
-	SongID *int64 `json:"song_id,omitempty"`
-	Count  int    `json:"count,omitempty"`
+	SongID int64 `json:"song_id"`
+	Count  int   `json:"count,omitempty"`
 }
 
 const defaultAddMoreCount = 5
@@ -47,6 +45,10 @@ func (e *Env) AddMoreVocab(w http.ResponseWriter, r *http.Request) {
 	var req addMoreVocabRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.SongID == 0 {
+		writeError(w, http.StatusBadRequest, "song_id is required")
 		return
 	}
 	count := req.Count
@@ -64,24 +66,19 @@ func (e *Env) AddMoreVocab(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/song-drill/drill/lines?song_id=&limit=
 func (e *Env) LineDrillQueue(w http.ResponseWriter, r *http.Request) {
-	songID, ok, err := parseOptionalSongID(r)
+	songID, err := parseRequiredSongID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	limit := parseLimit(r, defaultDrillLimit)
 
-	var songIDPtr *int64
-	if ok {
-		songIDPtr = &songID
-	}
-
-	cards, err := db.LineDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
+	cards, summary, err := db.LineDrillQueue(e.DB, userIDFromContext(r.Context()), songID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, cards)
+	writeJSON(w, http.StatusOK, map[string]any{"cards": cards, "summary": summary})
 }
 
 // POST /api/song-drill/drill/result
@@ -130,17 +127,16 @@ func (e *Env) RecordDrillResult(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state})
 }
 
-func parseOptionalSongID(r *http.Request) (id int64, present bool, err error) {
+// parseRequiredSongID reads song_id from the query string — every drill
+// endpoint is scoped to exactly one song, there's no "all songs" mode.
+func parseRequiredSongID(r *http.Request) (int64, error) {
 	raw := r.URL.Query().Get("song_id")
 	if raw == "" {
-		return 0, false, nil
+		return 0, errMissingSongID
 	}
-	id, err = strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return 0, false, err
-	}
-	return id, true, nil
+	return strconv.ParseInt(raw, 10, 64)
 }
+
 
 func parseLimit(r *http.Request, fallback int) int {
 	raw := r.URL.Query().Get("limit")

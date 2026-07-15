@@ -244,14 +244,18 @@ Not part of `srs.go`'s scheduling algorithm — this is queue/day policy,
 implemented in `backend/db/queries.go` around `VocabDrillQueue`.
 
 - At most `DailyNewWordCap` (10) brand-new words are introduced into a
-  profile's rotation per calendar day, **global across all songs** — not
-  per song.
+  profile's rotation per calendar day, **per song** — drilling one song's
+  vocab is never starved by another song's unrelated activity, and vice
+  versa. All drilling is song-scoped: there's no "all songs" queue for
+  either vocab or lines, `song_id` is a required parameter throughout
+  (`VocabDrillQueue`, `LineDrillQueue`, `ListVocabProgress`, etc.).
 - "Introduced" is tracked via `vocab_progress.introduced_at`: when
-  `VocabDrillQueue` is called and today's introduced count is under the
-  cap, it eagerly inserts `vocab_progress` rows (state `new`, due now) for
-  enough not-yet-seen words to fill the remaining slots, stamping
-  `introduced_at = now`. This reserves the day's set so re-fetching the
-  queue (e.g. a page reload) doesn't roll a different random 10.
+  `VocabDrillQueue` is called and today's introduced count for that song is
+  under the cap, it eagerly inserts `vocab_progress` rows (state `new`, due
+  now) for enough not-yet-seen words in that song to fill the remaining
+  slots, stamping `introduced_at = now`. This reserves the day's set so
+  re-fetching the queue (e.g. a page reload) doesn't roll a different
+  random 10.
 - `POST /drill/vocab/more` (`IntroduceMoreVocab`) bypasses the cap on
   demand — introduces N more words immediately regardless of today's
   total, for "I want to learn more today" sessions.

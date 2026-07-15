@@ -14,10 +14,16 @@
 	let busyId = $state<number | null>(null);
 	let actionError = $state<string | null>(null);
 	let resetTarget = $state<VocabProgressItem | null>(null);
+	let markKnownTarget = $state<VocabProgressItem | null>(null);
 
 	$effect(() => {
 		items = data.items;
 	});
+
+	// Every row shares the same song_title when this page is scoped to one
+	// song (data.songId set) — read it off the data instead of a separate
+	// fetch just for a heading/back-link label.
+	let songTitle = $derived(data.songId !== undefined ? (items[0]?.song_title ?? null) : null);
 
 	// Same three-way grouping as the drill counters (blue new / purple in
 	// progress / green done) — learning and relearning both read as
@@ -68,10 +74,13 @@
 	}
 
 	async function refresh() {
-		items = await listVocabProgress();
+		items = await listVocabProgress(data.songId);
 	}
 
-	async function markKnown(it: VocabProgressItem) {
+	async function confirmMarkKnown() {
+		const it = markKnownTarget;
+		markKnownTarget = null;
+		if (!it) return;
 		busyId = itemKey(it);
 		actionError = null;
 		try {
@@ -109,10 +118,15 @@
 		);
 </script>
 
-<BackLink href="/" label="Back to library" />
+<BackLink
+	href={data.songId !== undefined ? `/songs/${data.songId}` : '/'}
+	label={data.songId !== undefined ? `Back to ${songTitle ?? 'song'}` : 'Back to library'}
+/>
 
 <div class="mb-6 flex items-center justify-between">
-	<h1 class="text-2xl font-semibold text-ink">Progress</h1>
+	<h1 class="text-2xl font-semibold text-ink">
+		{songTitle ? `${songTitle} · Progress` : 'Progress'}
+	</h1>
 </div>
 
 {#if data.error}
@@ -147,7 +161,9 @@
 	<input
 		type="text"
 		bind:value={query}
-		placeholder="Search word, reading, meaning, or song…"
+		placeholder={data.songId !== undefined
+			? 'Search word, reading, or meaning…'
+			: 'Search word, reading, meaning, or song…'}
 		class={cn(
 			'mb-4 w-full px-4 py-2',
 			'border border-border bg-surface text-ink placeholder:text-muted',
@@ -197,7 +213,9 @@
 							<p class="text-lg text-ink">
 								<Furigana furi={it.furi} />
 							</p>
-							<span class="text-sm text-muted">{it.song_title}</span>
+							{#if data.songId === undefined}
+								<span class="text-sm text-muted">{it.song_title}</span>
+							{/if}
 						</div>
 						<p class="truncate text-sm text-good">{it.base_meaning}</p>
 						{#if it.state !== 'new'}
@@ -235,7 +253,7 @@
 									'rounded-lg transition hover:bg-good/20',
 									'disabled:opacity-50'
 								)}
-								onclick={() => markKnown(it)}
+								onclick={() => (markKnownTarget = it)}
 							>
 								Mark known
 							</button>
@@ -257,4 +275,15 @@
 	danger
 	onConfirm={confirmReset}
 	onCancel={() => (resetTarget = null)}
+/>
+
+<ConfirmDialog
+	open={markKnownTarget !== null}
+	title="Mark as known?"
+	message={markKnownTarget
+		? `Mark "${markKnownTarget.surface}" as known? This skips its normal review schedule and marks it mastered — you can always reset it back to new later.`
+		: ''}
+	confirmLabel="Mark known"
+	onConfirm={confirmMarkKnown}
+	onCancel={() => (markKnownTarget = null)}
 />

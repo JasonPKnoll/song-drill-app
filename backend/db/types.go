@@ -131,15 +131,31 @@ type LineCard struct {
 	Due         string  `json:"due"`
 }
 
-// VocabSessionSummary describes today's progress against the daily new-word
-// cap (see VocabDrillQueue / IntroduceMoreVocab in queries.go) — the
-// frontend uses this instead of deriving "new/in-progress/done" counts from
-// its own local session bookkeeping, so it reflects real per-day DB state.
+// VocabSessionSummary reports the three states a word can be in for this
+// profile+song, independent of "today" bookkeeping: New (never started),
+// InProgress (mid-cycle, will come back around shortly), and Old (review
+// backlog due today, from a previous day). A word leaves all three the
+// moment it's fully handled for the day — graduating pushes its due date
+// into the future, which drops it out of Old without ever being counted
+// anywhere else — so a fully-cleared day reads 0/0/0, not a persistent
+// "completed" tally. IntroducedToday/NewCap remain purely for the daily
+// new-word cap display/gating (see VocabDrillQueue), not the three-way
+// split. See the frontend drill pages, which render these as colored dots.
 type VocabSessionSummary struct {
-	NewToday        int `json:"new_today"`
+	New             int `json:"new"`
+	InProgress      int `json:"in_progress"`
+	Old             int `json:"old"`
+	IntroducedToday int `json:"introduced_today"`
 	NewCap          int `json:"new_cap"`
-	InProgressToday int `json:"in_progress_today"`
-	CompletedToday  int `json:"completed_today"`
+}
+
+// LineSessionSummary is VocabSessionSummary's line-drill counterpart —
+// lines have no daily new-word cap (no introduced_at column), so there's
+// no equivalent IntroducedToday/NewCap.
+type LineSessionSummary struct {
+	New        int `json:"new"`
+	InProgress int `json:"in_progress"`
+	Old        int `json:"old"`
 }
 
 type Stats struct {

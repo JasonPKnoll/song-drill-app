@@ -228,7 +228,7 @@ func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
-	cards, _, err := VocabDrillQueue(database, userID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userID, songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
 		t.Fatalf("RecordVocabResult (user A): %v", err)
 	}
 
-	cards, _, err := VocabDrillQueue(database, userB.ID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userB.ID, songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue (user B): %v", err)
 	}
@@ -273,12 +273,156 @@ func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
 	}
 }
 
+// This is the exact regression case behind "the tally stays 10/0/0 no
+// matter what I answer": a card must move out of New and into InProgress
+// the moment it's first answered, before it's graduated.
+func TestVocabSessionSummary_AnsweringNewCardMovesItToInProgress(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, summary, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	} else if summary.New != 1 || summary.InProgress != 0 {
+		t.Fatalf("initial summary = %+v, want New=1/InProgress=0", summary)
+	}
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.New != 0 {
+		t.Errorf("New = %d, want 0", summary.New)
+	}
+	if summary.InProgress != 1 {
+		t.Errorf("InProgress = %d, want 1", summary.InProgress)
+	}
+}
+
+// Graduating a card (three correct answers, per srs.LearningSteps) pushes
+// its due date a full day into the future — it must vanish from all three
+// buckets entirely, not linger in some persistent "done" tally.
+func TestVocabSessionSummary_GraduatedCardDisappearsFromAllBuckets(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, _, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	for i := 0; i < len(srs.LearningSteps); i++ {
+		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+			t.Fatalf("RecordVocabResult: %v", err)
+		}
+	}
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.New != 0 || summary.InProgress != 0 || summary.Old != 0 {
+		t.Errorf("summary = %+v, want New/InProgress/Old all 0 after graduating (this is the 0/0/0 end state)", summary)
+	}
+}
+
+// A card that graduated on a previous day and has since come due again is
+// "Old" backlog, not New or InProgress — and answering it moves it out of
+// Old (a miss lapses it into relearning, landing it in InProgress instead).
+func TestVocabSessionSummary_PreviouslyGraduatedCardDueTodayIsOld(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, vocabID, _ := testSong(t, database)
+
+	if _, _, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	for i := 0; i < len(srs.LearningSteps); i++ {
+		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+			t.Fatalf("RecordVocabResult: %v", err)
+		}
+	}
+	// Simulate the graduating interval having already elapsed — this word
+	// was reviewed on a previous day and is due again today.
+	if _, err := database.Exec(
+		`UPDATE vocab_progress SET due = datetime('now', '-1 hour') WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
+		userID, songID, vocabID,
+	); err != nil {
+		t.Fatalf("simulate past due: %v", err)
+	}
+
+	_, summary, err := VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.Old != 1 {
+		t.Errorf("Old = %d, want 1", summary.Old)
+	}
+	if summary.New != 0 || summary.InProgress != 0 {
+		t.Errorf("New/InProgress = %d/%d, want 0/0", summary.New, summary.InProgress)
+	}
+
+	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+		t.Fatalf("RecordVocabResult (miss): %v", err)
+	}
+	_, summary, err = VocabDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue: %v", err)
+	}
+	if summary.InProgress != 1 || summary.Old != 0 {
+		t.Errorf("after a miss, InProgress/Old = %d/%d, want 1/0", summary.InProgress, summary.Old)
+	}
+}
+
+// LineDrillQueue's summary follows the identical New/InProgress/Old model,
+// just over line_progress instead of vocab_progress.
+func TestLineDrillQueue_SummaryTracksNewInProgressOld(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songID, _, lineID := testSong(t, database)
+
+	_, summary, err := LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.New != 1 || summary.InProgress != 0 || summary.Old != 0 {
+		t.Fatalf("summary = %+v, want New=1/InProgress=0/Old=0 for an untouched line", summary)
+	}
+
+	if _, err := RecordLineResult(database, userID, lineID, true); err != nil {
+		t.Fatalf("RecordLineResult: %v", err)
+	}
+	_, summary, err = LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.New != 0 || summary.InProgress != 1 {
+		t.Errorf("after one correct answer, New/InProgress = %d/%d, want 0/1", summary.New, summary.InProgress)
+	}
+
+	for i := 1; i < len(srs.LearningSteps); i++ {
+		if _, err := RecordLineResult(database, userID, lineID, true); err != nil {
+			t.Fatalf("RecordLineResult: %v", err)
+		}
+	}
+	_, summary, err = LineDrillQueue(database, userID, songID, 20)
+	if err != nil {
+		t.Fatalf("LineDrillQueue: %v", err)
+	}
+	if summary.New != 0 || summary.InProgress != 0 || summary.Old != 0 {
+		t.Errorf("after graduating, summary = %+v, want all 0 (the 0/0/0 end state)", summary)
+	}
+}
+
 func TestListVocabProgress_DefaultsUntouchedWordsToNew(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	items, err := ListVocabProgress(database, userID, &songID)
+	items, err := ListVocabProgress(database, userID, songID)
 	if err != nil {
 		t.Fatalf("ListVocabProgress: %v", err)
 	}
@@ -309,7 +453,7 @@ func TestListVocabProgress_ReflectsRealProgress(t *testing.T) {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
-	items, err := ListVocabProgress(database, userID, &songID)
+	items, err := ListVocabProgress(database, userID, songID)
 	if err != nil {
 		t.Fatalf("ListVocabProgress: %v", err)
 	}
@@ -333,7 +477,7 @@ func TestBurnVocabProgress(t *testing.T) {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 
-	items, err := ListVocabProgress(database, userID, &songID)
+	items, err := ListVocabProgress(database, userID, songID)
 	if err != nil {
 		t.Fatalf("ListVocabProgress: %v", err)
 	}
@@ -362,7 +506,7 @@ func TestBurnVocabProgress_PreservesExistingDrillHistory(t *testing.T) {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 
-	items, err := ListVocabProgress(database, userID, &songID)
+	items, err := ListVocabProgress(database, userID, songID)
 	if err != nil {
 		t.Fatalf("ListVocabProgress: %v", err)
 	}
@@ -392,7 +536,7 @@ func TestResetVocabProgress(t *testing.T) {
 		t.Errorf("vocab_progress rows after reset = %d, want 0", count)
 	}
 
-	items, err := ListVocabProgress(database, userID, &songID)
+	items, err := ListVocabProgress(database, userID, songID)
 	if err != nil {
 		t.Fatalf("ListVocabProgress: %v", err)
 	}
@@ -401,7 +545,7 @@ func TestResetVocabProgress(t *testing.T) {
 	}
 
 	// The reset card must also be immediately due again in the drill queue.
-	cards, _, err := VocabDrillQueue(database, userID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userID, songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
