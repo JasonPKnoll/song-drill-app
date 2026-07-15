@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import { page } from '$app/state';
+	import { addLineVocab } from '$lib/api';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import VocabFlipCard from '$lib/components/VocabFlipCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
@@ -29,6 +30,31 @@
 
 	let query = $state('');
 	let flipped = $state<Set<number>>(new Set());
+	let addingLineVocab = $state(false);
+	let addLineVocabMessage = $state<string | null>(null);
+	let addLineVocabError = $state<string | null>(null);
+
+	// Introduces every not-yet-seen word in this line into today's vocab
+	// drilling right now, bypassing the daily cap/working-set pacing — a
+	// deliberate, bounded request (a handful of words at most), unlike the
+	// open-ended "give me new words" the drill session's own pacing guards.
+	async function handleAddLineVocab() {
+		if (sourceLineId === null || !data.song) return;
+		addingLineVocab = true;
+		addLineVocabMessage = null;
+		addLineVocabError = null;
+		try {
+			const result = await addLineVocab(data.song.id, sourceLineId);
+			addLineVocabMessage =
+				result.added === 0
+					? "All of this line's words are already in your drilling."
+					: `Added ${result.added} new word${result.added === 1 ? '' : 's'} to today's drilling.`;
+		} catch (e) {
+			addLineVocabError = e instanceof Error ? e.message : String(e);
+		} finally {
+			addingLineVocab = false;
+		}
+	}
 
 	function toggle(id: number) {
 		const next = new Set(flipped);
@@ -100,6 +126,25 @@
 				<Furigana furi={sourceLine.furi} />
 			</p>
 			<p class="mt-1 text-good">{sourceLine.natural}</p>
+			<button
+				type="button"
+				disabled={addingLineVocab}
+				onclick={handleAddLineVocab}
+				class={cn(
+					'mt-3 px-3 py-1.5 text-sm font-medium',
+					'border border-accent/50 bg-accent/10 text-accent',
+					'rounded-lg transition hover:bg-accent/20',
+					'disabled:opacity-50'
+				)}
+			>
+				{addingLineVocab ? 'Adding…' : 'Add this sentence to my drilling'}
+			</button>
+			{#if addLineVocabMessage}
+				<p class="mt-2 text-sm text-muted">{addLineVocabMessage}</p>
+			{/if}
+			{#if addLineVocabError}
+				<p class="mt-2 text-sm text-bad">{addLineVocabError}</p>
+			{/if}
 		</div>
 	{/if}
 

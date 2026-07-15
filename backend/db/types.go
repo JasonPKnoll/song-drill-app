@@ -184,9 +184,11 @@ type Stats struct {
 }
 
 // DrillResultRequest is the body of POST /api/song-drill/drill/result.
+// No song_id: vocab_progress is global per word (see schema.sql), and
+// line_progress is already uniquely identified by line_id alone, so
+// neither branch needs to know which song the card came from.
 type DrillResultRequest struct {
 	Type    string `json:"type"` // "vocab" or "line"
-	SongID  *int64 `json:"song_id,omitempty"`
 	VocabID *int64 `json:"vocab_id,omitempty"`
 	LineID  *int64 `json:"line_id,omitempty"`
 	Correct bool   `json:"correct"`
@@ -219,8 +221,15 @@ type VocabProgressItem struct {
 	Bucket string `json:"bucket"` // new | progress | done | burned
 }
 
-// VocabProgressActionRequest is the body of the burn/reset endpoints.
+// VocabProgressActionRequest is the body of the burn/reset endpoints. No
+// song_id: vocab_progress is global per word (see schema.sql), so a single
+// vocab_id is all either action needs.
 type VocabProgressActionRequest struct {
-	SongID  int64 `json:"song_id"`
 	VocabID int64 `json:"vocab_id"`
+}
+
+// ResetAllVocabProgressRequest is the body of the reset-all endpoint —
+// resets every word belonging to one song (see ResetAllVocabProgress).
+type ResetAllVocabProgressRequest struct {
+	SongID int64 `json:"song_id"`
 }

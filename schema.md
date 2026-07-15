@@ -162,10 +162,13 @@ CREATE TABLE line_words (
 
 -- SRS progress for vocab cards. Anki-style state machine (new -> learning ->
 -- review, with relearning on a lapse from review) — see backend/srs/srs.go.
+-- Global per (profile, word) — NOT per song. The same word reviewed from
+-- two different songs is the same review track; only song_vocab's
+-- context_meaning stays per-song. See "Daily new-word cap" below for what
+-- IS still scoped per song (introducing a word for the first time ever).
 CREATE TABLE vocab_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
     vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
     state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
     step_index    INTEGER NOT NULL DEFAULT 0,             -- position within the current learning/relearning steps
@@ -176,8 +179,8 @@ CREATE TABLE vocab_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are seconds-scale
     last_seen     TEXT,
-    introduced_at TEXT,                     -- when this word was assigned into a daily new-word batch (nullable; see "Daily new-word cap" below)
-    UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
+    introduced_at TEXT,                     -- when this word was first assigned into a daily new-word batch (nullable; see "Daily new-word cap" below)
+    UNIQUE(user_id, vocab_id)               -- progress is per profile, per word — global across songs
 );
 
 -- SRS progress for line cards (same state machine as vocab_progress).
@@ -238,29 +241,42 @@ in the `review` stage with `interval_days >= 30`.
 
 ---
 
-## Daily new-word cap (vocab only)
+## Daily new-word cap and working-set pacing (vocab and lines)
 
 Not part of `srs.go`'s scheduling algorithm — this is queue/day policy,
-implemented in `backend/db/queries.go` around `VocabDrillQueue`.
+implemented in `backend/db/queries.go` around `VocabDrillQueue` and
+`LineDrillQueue`.
 
-- At most `DailyNewWordCap` (10) brand-new words are introduced into a
-  profile's rotation per calendar day, **per song** — drilling one song's
-  vocab is never starved by another song's unrelated activity, and vice
-  versa. All drilling is song-scoped: there's no "all songs" queue for
-  either vocab or lines, `song_id` is a required parameter throughout
-  (`VocabDrillQueue`, `LineDrillQueue`, `ListVocabProgress`, etc.).
-- "Introduced" is tracked via `vocab_progress.introduced_at`: when
-  `VocabDrillQueue` is called and today's introduced count for that song is
-  under the cap, it eagerly inserts `vocab_progress` rows (state `new`, due
-  now) for enough not-yet-seen words in that song to fill the remaining
-  slots, stamping `introduced_at = now`. This reserves the day's set so
-  re-fetching the queue (e.g. a page reload) doesn't roll a different
-  random 10.
-- `POST /drill/vocab/more` (`IntroduceMoreVocab`) bypasses the cap on
-  demand — introduces N more words immediately regardless of today's
-  total, for "I want to learn more today" sessions.
-- Line drill has no equivalent cap — `line_progress` has no
-  `introduced_at` column.
+- At most `DailyNewWordCap`/`DailyNewLineCap` (10 each) brand-new
+  words/lines are introduced into a profile's rotation per calendar day,
+  **per song** — drilling one song's vocab is never starved by another
+  song's unrelated activity, and vice versa. All drilling is song-scoped:
+  there's no "all songs" queue for either vocab or lines, `song_id` is a
+  required parameter throughout (`VocabDrillQueue`, `LineDrillQueue`,
+  `ListVocabProgress`, etc.). Note `vocab_progress` itself is global (see
+  above) — "per song" here means the *introduction budget*, not the
+  review track: once a word has a `vocab_progress` row from whichever song
+  first introduced it, every other song containing that word just shows it
+  whenever it's due, without spending its own budget re-introducing it.
+- New words/lines don't all get introduced at once, even within a single
+  song's budget: `WorkingSetLimit` (8) caps how many can be simultaneously
+  "in rotation" (state `new`/`learning`/`relearning`) at a time, and
+  `NewWordsPerTopUp` (1) means at most one new word/line trickles in per
+  call to `VocabDrillQueue`/`LineDrillQueue`. This avoids flooding a
+  session with many cards all coming due in the same 10s/30s/2m window —
+  due reviews surface first (`ORDER BY due ASC`), new cards trickle in as
+  room opens up.
+- "Introduced" is tracked via `introduced_at` (`vocab_progress` and
+  `line_progress` both have it): when the drill queue is called and
+  today's introduced count for that song is under the cap (and there's
+  room under `WorkingSetLimit`), it eagerly inserts a progress row (state
+  `new`, due now) for one not-yet-seen word/line in that song, stamping
+  `introduced_at = now`. This reserves the day's set so re-fetching the
+  queue (e.g. a page reload) doesn't roll a different random word.
+- `POST /drill/vocab/more` / `POST /drill/lines/more` (`IntroduceMoreVocab`
+  / `IntroduceMoreLines`) bypass the cap on demand — introduce N more
+  right away regardless of today's total, for "I want to learn more today"
+  sessions.
 
 ---
 
@@ -272,7 +288,8 @@ separate SRS progress/stats, picked via a plain, unsigned `song_drill_user`
 cookie (see `backend/handlers/profiles.go`), not a password.
 
 - Songs/vocab/lines are global, shared content — only `vocab_progress` and
-  `line_progress` are scoped per profile.
+  `line_progress` are scoped per profile (and, for `vocab_progress`, global
+  across songs *within* that profile — see its DDL above).
 - Middleware resolves the active profile from the cookie on every request,
   falling back to the earliest-created profile if the cookie is missing or
   names a profile that's since been deleted (e.g. from another tab).

@@ -250,7 +250,7 @@ func ListSongs(database *sql.DB, userID int64) ([]SongSummary, error) {
 		SELECT
 			s.id, s.title, s.artist, s.language, s.notes, s.created_at,
 			(SELECT COUNT(*) FROM song_vocab sv WHERE sv.song_id = s.id) AS vocab_count,
-			(SELECT COUNT(*) FROM vocab_progress vp WHERE vp.song_id = s.id AND vp.user_id = ? AND vp.state = 'review' AND vp.interval_days >= ?) AS mastered_count,
+			(SELECT COUNT(*) FROM song_vocab sv JOIN vocab_progress vp ON vp.vocab_id = sv.vocab_id AND vp.user_id = ? WHERE sv.song_id = s.id AND vp.state = 'review' AND vp.interval_days >= ?) AS mastered_count,
 			(SELECT COUNT(*) FROM lines l WHERE l.song_id = s.id) AS line_count
 		FROM songs s
 		ORDER BY s.created_at DESC, s.id DESC
@@ -277,8 +277,11 @@ func ListSongs(database *sql.DB, userID int64) ([]SongSummary, error) {
 }
 
 // DeleteSong removes a song and (via ON DELETE CASCADE) its lines, line_words,
-// song_vocab, vocab_progress, and line_progress rows. Global vocab entries
-// shared with other songs are untouched. Returns false if no song matched id.
+// song_vocab, and line_progress rows. Global vocab entries and vocab_progress
+// (a profile's word-level SRS state, shared across every song a word
+// appears in — see schema.sql) are untouched: losing the song that once
+// taught a word shouldn't erase having learned it. Returns false if no song
+// matched id.
 func DeleteSong(database *sql.DB, id int64) (bool, error) {
 	res, err := database.Exec(`DELETE FROM songs WHERE id = ?`, id)
 	if err != nil {
@@ -401,50 +404,60 @@ func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 	return lines, rows.Err()
 }
 
-// introducedTodayCount returns how many brand-new words have already been
-// assigned into this profile's rotation today (UTC calendar day), scoped to
-// one song — the daily cap is enforced per (user, song), not globally
-// across a profile's whole library, so drilling one song's vocab is never
-// starved by another song's unrelated activity. See the "Daily new-word
-// cap" section of schema.md.
+// introducedTodayCount returns how many words belonging to this song have
+// already been assigned into this profile's rotation today (UTC calendar
+// day) — the daily cap is enforced per (user, song), not globally across a
+// profile's whole library, so drilling one song's vocab is never starved
+// by another song's unrelated activity. vocab_progress itself is global
+// (see schema.sql), so this joins through song_vocab to scope by song; a
+// word introduced today via a different song that also happens to belong
+// to this song still counts here, since it genuinely did just become known
+// from this song's perspective too. See the "Daily new-word cap" section
+// of schema.md.
 func introducedTodayCount(tx vocabDBTX, userID, songID int64) (int, error) {
 	var n int
 	err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND date(introduced_at) = date('now')`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND date(vp.introduced_at) = date('now')`,
 		userID, songID,
 	).Scan(&n)
 	return n, err
 }
 
-// activeRotationCount returns how many words are currently "in rotation" —
-// state new, learning, or relearning, i.e. not yet graduated to review —
-// for one profile+song. VocabDrillQueue gates new-word top-up against
+// activeRotationCount returns how many of this song's words are currently
+// "in rotation" — state new, learning, or relearning, i.e. not yet
+// graduated to review. VocabDrillQueue gates new-word top-up against
 // WorkingSetLimit using this, so a big batch of lapsed reviews already
 // occupying the rotation holds off new introductions just as much as a
 // batch of not-yet-graduated new words would.
 func activeRotationCount(tx vocabDBTX, userID, songID int64) (int, error) {
 	var n int
 	err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND state IN ('new', 'learning', 'relearning')`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND vp.state IN ('new', 'learning', 'relearning')`,
 		userID, songID,
 	).Scan(&n)
 	return n, err
 }
 
 // introduceNewVocab eagerly creates up to `count` fresh vocab_progress rows
-// (state 'new', due now, introduced_at now) for words this profile has
-// never seen before, so a page refresh doesn't roll a different random set
-// for today — see the "Daily new-word cap" section of schema.md. Scoped to
-// one song; callers decide how many slots to fill (VocabDrillQueue stops at
-// the daily cap, IntroduceMoreVocab doesn't check the cap at all).
+// (state 'new', due now, introduced_at now) for words in this song this
+// profile has never seen — in this song or any other, since vocab_progress
+// is global (see schema.sql) — so a page refresh doesn't roll a different
+// random set for today. See the "Daily new-word cap" section of
+// schema.md. Scoped to one song; callers decide how many slots to fill
+// (VocabDrillQueue stops at the daily cap, IntroduceMoreVocab doesn't check
+// the cap at all).
 func introduceNewVocab(tx vocabDBTX, userID, songID int64, count int, now time.Time) error {
 	if count <= 0 {
 		return nil
 	}
 	query := `
-		SELECT sv.song_id, sv.vocab_id
+		SELECT sv.vocab_id
 		FROM song_vocab sv
-		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+		LEFT JOIN vocab_progress vp ON vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE vp.id IS NULL AND sv.song_id = ?
 	`
 	args := []any{userID, songID}
@@ -455,15 +468,14 @@ func introduceNewVocab(tx vocabDBTX, userID, songID int64, count int, now time.T
 	if err != nil {
 		return err
 	}
-	type candidate struct{ songID, vocabID int64 }
-	var candidates []candidate
+	var vocabIDs []int64
 	for rows.Next() {
-		var c candidate
-		if err := rows.Scan(&c.songID, &c.vocabID); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return err
 		}
-		candidates = append(candidates, c)
+		vocabIDs = append(vocabIDs, id)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -472,11 +484,11 @@ func introduceNewVocab(tx vocabDBTX, userID, songID int64, count int, now time.T
 	rows.Close()
 
 	nowStr := formatDue(now)
-	for _, c := range candidates {
+	for _, vocabID := range vocabIDs {
 		if _, err := tx.Exec(`
-			INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
-			VALUES (?, ?, ?, 'new', 0, ?, 0, 0, 0, 0, ?, NULL, ?)
-		`, userID, c.songID, c.vocabID, srs.StartingEase, nowStr, nowStr); err != nil {
+			INSERT INTO vocab_progress (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, 'new', 0, ?, 0, 0, 0, 0, ?, NULL, ?)
+		`, userID, vocabID, srs.StartingEase, nowStr, nowStr); err != nil {
 			return err
 		}
 	}
@@ -491,7 +503,9 @@ func introduceNewVocab(tx vocabDBTX, userID, songID int64, count int, now time.T
 func vocabNextDueAt(tx vocabDBTX, userID, songID int64) (*string, error) {
 	var dueStr sql.NullString
 	if err := tx.QueryRow(
-		`SELECT MIN(due) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND due > datetime('now')`,
+		`SELECT MIN(vp.due) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND vp.due > datetime('now')`,
 		userID, songID,
 	).Scan(&dueStr); err != nil {
 		return nil, err
@@ -615,25 +629,33 @@ func vocabSessionSummary(tx vocabDBTX, userID, songID int64) (VocabSessionSummar
 	sum := VocabSessionSummary{NewCap: DailyNewWordCap}
 
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND date(introduced_at) = date('now')`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND date(vp.introduced_at) = date('now')`,
 		userID, songID,
 	).Scan(&sum.IntroducedToday); err != nil {
 		return sum, err
 	}
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND state = 'new'`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND vp.state = 'new'`,
 		userID, songID,
 	).Scan(&sum.New); err != nil {
 		return sum, err
 	}
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND state IN ('learning', 'relearning')`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND vp.state IN ('learning', 'relearning')`,
 		userID, songID,
 	).Scan(&sum.InProgress); err != nil {
 		return sum, err
 	}
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND state = 'review' AND due <= datetime('now')`,
+		`SELECT COUNT(*) FROM vocab_progress vp
+		 JOIN song_vocab sv ON sv.vocab_id = vp.vocab_id
+		 WHERE vp.user_id = ? AND sv.song_id = ? AND vp.state = 'review' AND vp.due <= datetime('now')`,
 		userID, songID,
 	).Scan(&sum.Old); err != nil {
 		return sum, err
@@ -663,6 +685,68 @@ func IntroduceMoreVocab(database *sql.DB, userID, songID int64, count int) (Voca
 		return VocabSessionSummary{}, err
 	}
 	return summary, nil
+}
+
+// IntroduceLineVocab eagerly introduces every word belonging to one line
+// that this profile hasn't seen before — in this song or any other, since
+// vocab_progress is global (see schema.sql) — bypassing DailyNewWordCap and
+// WorkingSetLimit entirely. This is the "add this sentence's words to my
+// drilling" action from the vocab browser's line-filtered view: a
+// deliberate, inherently bounded request (a handful of words at most, from
+// line_words), not the kind of open-ended "give me new words" call the
+// pacing exists to guard against. Words this profile already has progress
+// on (from anywhere) are left untouched, not reset. Returns how many words
+// were actually newly introduced, alongside the song's updated summary so
+// the caller can refresh its dots without a second round trip.
+func IntroduceLineVocab(database *sql.DB, userID, songID, lineID int64) (int, VocabSessionSummary, error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return 0, VocabSessionSummary{}, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`
+		SELECT DISTINCT lw.vocab_id
+		FROM line_words lw
+		LEFT JOIN vocab_progress vp ON vp.vocab_id = lw.vocab_id AND vp.user_id = ?
+		WHERE lw.line_id = ? AND vp.id IS NULL
+	`, userID, lineID)
+	if err != nil {
+		return 0, VocabSessionSummary{}, err
+	}
+	var vocabIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, VocabSessionSummary{}, err
+		}
+		vocabIDs = append(vocabIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, VocabSessionSummary{}, err
+	}
+	rows.Close()
+
+	nowStr := formatDue(time.Now())
+	for _, vocabID := range vocabIDs {
+		if _, err := tx.Exec(`
+			INSERT INTO vocab_progress (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, 'new', 0, ?, 0, 0, 0, 0, ?, NULL, ?)
+		`, userID, vocabID, srs.StartingEase, nowStr, nowStr); err != nil {
+			return 0, VocabSessionSummary{}, err
+		}
+	}
+
+	summary, err := vocabSessionSummary(tx, userID, songID)
+	if err != nil {
+		return 0, VocabSessionSummary{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, VocabSessionSummary{}, err
+	}
+	return len(vocabIDs), summary, nil
 }
 
 // VocabDrillQueue returns due vocab cards for the given profile within one
@@ -712,15 +796,18 @@ func VocabDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]Vocab
 		JOIN vocab v ON v.id = sv.vocab_id
 		JOIN songs s ON s.id = sv.song_id
 		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
-		JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+		JOIN vocab_progress vp ON vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE vp.due <= datetime('now') AND sv.song_id = ?
 	`
-	// vocab_progress is now an inner join, not left — a word with no progress
-	// row at all means it's beyond today's cap (introduceNewVocab above is
-	// the only thing that creates rows for never-seen words), so it must not
-	// leak into the queue. A stray NULL-due row can't happen either: every
-	// row this query can see was either created here with due=now or by
-	// RecordVocabResult, both of which always set due.
+	// vocab_progress is an inner join, not left — a word with no progress row
+	// at all means it's beyond today's cap (introduceNewVocab above is the
+	// only thing that creates rows for never-seen words), so it must not
+	// leak into the queue. vocab_progress is also global now (no song_id of
+	// its own — see schema.sql), so this join is on vocab_id alone; sv.song_id
+	// in the WHERE clause is what scopes the whole query to this song. A
+	// stray NULL-due row can't happen either: every row this query can see
+	// was either created here with due=now or by RecordVocabResult, both of
+	// which always set due.
 	args := []any{userID, songID}
 	query += " ORDER BY vp.due ASC, sv.first_line_position ASC LIMIT ?"
 	args = append(args, limit)
@@ -933,19 +1020,20 @@ func LineDrillQueue(database *sql.DB, userID, songID int64, limit int) ([]LineCa
 	return cards, summary, nil
 }
 
-// RecordVocabResult upserts vocab_progress for (userID, songID, vocabID),
-// loading its current srs.State (or a fresh one, if this profile has never
-// seen this card), applying the grade, and persisting the result. Returns
-// the resulting state so the caller can tell whether this card still needs
-// same-day repetition (learning/relearning) or is done for now (review).
-func RecordVocabResult(database *sql.DB, userID, songID, vocabID int64, correct bool) (srs.State, error) {
+// RecordVocabResult upserts vocab_progress for (userID, vocabID) — global,
+// not per-song (see schema.sql) — loading its current srs.State (or a
+// fresh one, if this profile has never seen this word in any song),
+// applying the grade, and persisting the result. Returns the resulting
+// state so the caller can tell whether this card still needs same-day
+// repetition (learning/relearning) or is done for now (review).
+func RecordVocabResult(database *sql.DB, userID, vocabID int64, correct bool) (srs.State, error) {
 	now := time.Now()
 	current := srs.New(now)
 
 	var stage, due string
 	err := database.QueryRow(
-		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
-		userID, songID, vocabID,
+		`SELECT state, step_index, ease_factor, interval_days, lapses, due FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`,
+		userID, vocabID,
 	).Scan(&stage, &current.StepIndex, &current.EaseFactor, &current.IntervalDays, &current.Lapses, &due)
 	switch {
 	case err == sql.ErrNoRows:
@@ -966,9 +1054,9 @@ func RecordVocabResult(database *sql.DB, userID, songID, vocabID int64, correct 
 	}
 
 	_, err = database.Exec(`
-		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-		ON CONFLICT(user_id, song_id, vocab_id) DO UPDATE SET
+		INSERT INTO vocab_progress (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+		ON CONFLICT(user_id, vocab_id) DO UPDATE SET
 			state = excluded.state,
 			step_index = excluded.step_index,
 			ease_factor = excluded.ease_factor,
@@ -978,7 +1066,7 @@ func RecordVocabResult(database *sql.DB, userID, songID, vocabID int64, correct 
 			correct = vocab_progress.correct + ?,
 			due = excluded.due,
 			last_seen = excluded.last_seen
-	`, userID, songID, vocabID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
+	`, userID, vocabID, string(next.Stage), next.StepIndex, next.EaseFactor, next.IntervalDays, next.Lapses,
 		correctInc, formatDue(next.Due), formatDue(now), correctInc)
 	if err != nil {
 		return srs.State{}, err
@@ -1037,8 +1125,10 @@ func RecordLineResult(database *sql.DB, userID, lineID int64, correct bool) (srs
 
 // ListVocabProgress returns every vocab word in one song alongside the
 // active profile's progress on it — words never drilled default to "new"
-// with zero stats, the same COALESCE convention VocabDrillQueue uses. This
-// is the per-song Progress page's data source.
+// with zero stats, the same COALESCE convention VocabDrillQueue uses.
+// Progress itself is global (see schema.sql): a word shared with another
+// song shows that same shared state here too, just paired with this song's
+// title/context_meaning. This is the per-song Progress page's data source.
 func ListVocabProgress(database *sql.DB, userID, songID int64) ([]VocabProgressItem, error) {
 	query := `
 		SELECT
@@ -1048,7 +1138,7 @@ func ListVocabProgress(database *sql.DB, userID, songID int64) ([]VocabProgressI
 		FROM song_vocab sv
 		JOIN vocab v ON v.id = sv.vocab_id
 		JOIN songs s ON s.id = sv.song_id
-		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+		LEFT JOIN vocab_progress vp ON vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE sv.song_id = ?
 		ORDER BY sv.first_line_position ASC
 	`
@@ -1104,19 +1194,21 @@ func vocabProgressBucket(state string, mastered bool) string {
 // produces. Real drill history (seen/correct/lapses) is left untouched on
 // an existing row rather than fabricated, since the learner didn't actually
 // answer anything; a brand-new row accurately starts that history at zero.
-func BurnVocabProgress(database *sql.DB, userID, songID, vocabID int64) error {
+// Global (see schema.sql): burning a word from any one song's Progress page
+// marks it known everywhere that word appears.
+func BurnVocabProgress(database *sql.DB, userID, vocabID int64) error {
 	next := srs.Burned(time.Now())
 	_, err := database.Exec(`
-		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
-		VALUES (?, ?, ?, ?, 0, ?, ?, 0, 0, 0, ?, ?)
-		ON CONFLICT(user_id, song_id, vocab_id) DO UPDATE SET
+		INSERT INTO vocab_progress (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen)
+		VALUES (?, ?, ?, 0, ?, ?, 0, 0, 0, ?, ?)
+		ON CONFLICT(user_id, vocab_id) DO UPDATE SET
 			state = excluded.state,
 			step_index = 0,
 			ease_factor = excluded.ease_factor,
 			interval_days = excluded.interval_days,
 			due = excluded.due,
 			last_seen = excluded.last_seen
-	`, userID, songID, vocabID, string(next.Stage), next.EaseFactor, next.IntervalDays,
+	`, userID, vocabID, string(next.Stage), next.EaseFactor, next.IntervalDays,
 		formatDue(next.Due), formatDue(time.Now()))
 	return err
 }
@@ -1124,12 +1216,27 @@ func BurnVocabProgress(database *sql.DB, userID, songID, vocabID int64) error {
 // ResetVocabProgress wipes a profile's progress on a word back to "new" by
 // deleting its row entirely — the same representation an actually-untouched
 // word has (COALESCE(vp.state, 'new')), so there's no separate "reset"
-// state to keep in sync with the rest of the schema.
-func ResetVocabProgress(database *sql.DB, userID, songID, vocabID int64) error {
+// state to keep in sync with the rest of the schema. Global (see
+// schema.sql): resetting a word from any one song's Progress page resets it
+// everywhere that word appears — there's only one shared row to delete.
+func ResetVocabProgress(database *sql.DB, userID, vocabID int64) error {
 	_, err := database.Exec(
-		`DELETE FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
-		userID, songID, vocabID,
+		`DELETE FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`,
+		userID, vocabID,
 	)
+	return err
+}
+
+// ResetAllVocabProgress wipes a profile's progress on every word that
+// appears in one song — the Progress page's "reset all" action. Since
+// vocab_progress is global, a word shared with another song is reset there
+// too, not just "unlinked" from this song; that follows directly from
+// progress being one shared track per word rather than per (song, word).
+func ResetAllVocabProgress(database *sql.DB, userID, songID int64) error {
+	_, err := database.Exec(`
+		DELETE FROM vocab_progress
+		WHERE user_id = ? AND vocab_id IN (SELECT vocab_id FROM song_vocab WHERE song_id = ?)
+	`, userID, songID)
 	return err
 }
 
@@ -1154,7 +1261,7 @@ func GetStats(database *sql.DB, userID int64) (*Stats, error) {
 	}
 	if err := database.QueryRow(`
 		SELECT COUNT(*) FROM song_vocab sv
-		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+		LEFT JOIN vocab_progress vp ON vp.vocab_id = sv.vocab_id AND vp.user_id = ?
 		WHERE vp.due IS NULL OR vp.due <= datetime('now')
 	`, userID).Scan(&st.VocabDueToday); err != nil {
 		return nil, err

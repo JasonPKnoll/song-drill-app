@@ -31,7 +31,7 @@ func (e *Env) BurnVocabProgress(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := db.BurnVocabProgress(e.DB, userIDFromContext(c), req.SongID, req.VocabID); err != nil {
+	if err := db.BurnVocabProgress(e.DB, userIDFromContext(c), req.VocabID); err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -45,7 +45,28 @@ func (e *Env) ResetVocabProgress(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := db.ResetVocabProgress(e.DB, userIDFromContext(c), req.SongID, req.VocabID); err != nil {
+	if err := db.ResetVocabProgress(e.DB, userIDFromContext(c), req.VocabID); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(c, http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/song-drill/progress/vocab/reset-all
+// Resets every word belonging to one song — global (see
+// db.ResetAllVocabProgress), so a word shared with another song is reset
+// there too, not just unlinked from this song.
+func (e *Env) ResetAllVocabProgress(c *gin.Context) {
+	var req db.ResetAllVocabProgressRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.SongID == 0 {
+		writeError(c, http.StatusBadRequest, "song_id is required")
+		return
+	}
+	if err := db.ResetAllVocabProgress(e.DB, userIDFromContext(c), req.SongID); err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}

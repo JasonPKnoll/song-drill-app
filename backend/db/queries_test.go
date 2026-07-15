@@ -51,9 +51,9 @@ func testSong(t *testing.T, database *sql.DB) (songID, vocabID, lineID int64) {
 func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
-	songID, vocabID, _ := testSong(t, database)
+	_, vocabID, _ := testSong(t, database)
 
-	first, err := RecordVocabResult(database, userID, songID, vocabID, true)
+	first, err := RecordVocabResult(database, userID, vocabID, true)
 	if err != nil {
 		t.Fatalf("first RecordVocabResult: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testi
 		t.Fatalf("after 1st correct answer: Stage = %q, want %q (should not be done yet)", first.Stage, srs.StageLearning)
 	}
 
-	second, err := RecordVocabResult(database, userID, songID, vocabID, true)
+	second, err := RecordVocabResult(database, userID, vocabID, true)
 	if err != nil {
 		t.Fatalf("second RecordVocabResult: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testi
 		t.Fatalf("after 2nd correct answer: Stage = %q, want %q (should not be done yet)", second.Stage, srs.StageLearning)
 	}
 
-	third, err := RecordVocabResult(database, userID, songID, vocabID, true)
+	third, err := RecordVocabResult(database, userID, vocabID, true)
 	if err != nil {
 		t.Fatalf("third RecordVocabResult: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testi
 	}
 
 	var seen, correct int
-	if err := database.QueryRow(`SELECT seen, correct FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`, userID, songID, vocabID).Scan(&seen, &correct); err != nil {
+	if err := database.QueryRow(`SELECT seen, correct FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, vocabID).Scan(&seen, &correct); err != nil {
 		t.Fatalf("query seen/correct: %v", err)
 	}
 	if seen != 3 || correct != 3 {
@@ -89,9 +89,9 @@ func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testi
 func TestRecordVocabResult_MissKeepsCardInRotation(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
-	songID, vocabID, _ := testSong(t, database)
+	_, vocabID, _ := testSong(t, database)
 
-	result, err := RecordVocabResult(database, userID, songID, vocabID, false)
+	result, err := RecordVocabResult(database, userID, vocabID, false)
 	if err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
@@ -103,12 +103,15 @@ func TestRecordVocabResult_MissKeepsCardInRotation(t *testing.T) {
 	}
 }
 
-// Progress is per-song: the same word studied in two different songs must
-// track two independent SRS states, per the UNIQUE(user_id, song_id, vocab_id) design.
-func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
+// This is the behavior the "if three songs have わたし then that word
+// should have the same progress on all songs" request asked for:
+// vocab_progress is global per (profile, word) — UNIQUE(user_id, vocab_id)
+// — not per song. Answering the same word from a second song continues the
+// one shared review track instead of starting a fresh, independent one.
+func TestRecordVocabResult_ProgressIsGlobalAcrossSongs(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
-	songA, vocabID, _ := testSong(t, database)
+	_, vocabID, _ := testSong(t, database)
 
 	payload := IngestPayload{
 		Song: IngestSongMeta{Title: "第二の歌", Artist: "Demo", Language: "ja"},
@@ -121,8 +124,8 @@ func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 		t.Fatalf("IngestSong (song B): %v", err)
 	}
 
-	if _, err := RecordVocabResult(database, userID, songA, vocabID, true); err != nil {
-		t.Fatalf("RecordVocabResult (song A): %v", err)
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult (via song A): %v", err)
 	}
 
 	var count int
@@ -130,47 +133,59 @@ func TestRecordVocabResult_ProgressIsPerSong(t *testing.T) {
 		t.Fatalf("count vocab_progress: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("vocab_progress rows for vocab_id after answering only in song A = %d, want 1", count)
+		t.Fatalf("vocab_progress rows for vocab_id = %d, want 1 (one shared row)", count)
 	}
 
-	stateB, err := RecordVocabResult(database, userID, songB, vocabID, true)
+	// Answering again "from song B" (the API no longer even takes a song id
+	// — see db.RecordVocabResult) must continue the same track, not reset it.
+	stateFromB, err := RecordVocabResult(database, userID, vocabID, true)
 	if err != nil {
-		t.Fatalf("RecordVocabResult (song B): %v", err)
+		t.Fatalf("RecordVocabResult (via song B): %v", err)
 	}
-	if stateB.Stage != srs.StageLearning {
-		t.Errorf("song B's first answer: Stage = %q, want %q (must not inherit song A's progress)", stateB.Stage, srs.StageLearning)
+	if stateFromB.StepIndex != 2 {
+		t.Errorf("StepIndex after 2nd correct answer = %d, want 2 (continuing song A's progress, not restarting from 1)", stateFromB.StepIndex)
 	}
 
 	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE vocab_id = ?`, vocabID).Scan(&count); err != nil {
 		t.Fatalf("count vocab_progress: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("vocab_progress rows for vocab_id after answering in both songs = %d, want 2", count)
+	if count != 1 {
+		t.Errorf("vocab_progress rows for vocab_id after answering via both songs = %d, want 1 (still shared, not duplicated)", count)
+	}
+
+	// And the word must show up already in-progress in song B's own drill
+	// queue/progress list — not as a fresh, unrelated "new" word.
+	items, err := ListVocabProgress(database, userID, songB)
+	if err != nil {
+		t.Fatalf("ListVocabProgress (song B): %v", err)
+	}
+	if items[0].State != string(srs.StageLearning) || items[0].Seen != 2 {
+		t.Errorf("song B's view of the word: state=%q seen=%d, want state=%q seen=2 (the shared progress)", items[0].State, items[0].Seen, srs.StageLearning)
 	}
 }
 
 // The point of profiles: two people sharing an install must not see or
-// affect each other's SRS progress on the exact same song/word.
+// affect each other's SRS progress on the exact same word.
 func TestRecordVocabResult_ProgressIsPerProfile(t *testing.T) {
 	database := openTestDB(t)
 	userA := defaultUserID(t, database)
-	songID, vocabID, _ := testSong(t, database)
+	_, vocabID, _ := testSong(t, database)
 
 	userB, err := CreateUser(database, "Second Player", "#6ee7a0")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userA, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult (user A): %v", err)
 	}
-	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userA, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult (user A, 2nd): %v", err)
 	}
 
 	// User B has never touched this card — their first answer must start
 	// fresh (learning), not inherit user A's already-graduated review state.
-	stateB, err := RecordVocabResult(database, userB.ID, songID, vocabID, true)
+	stateB, err := RecordVocabResult(database, userB.ID, vocabID, true)
 	if err != nil {
 		t.Fatalf("RecordVocabResult (user B): %v", err)
 	}
@@ -179,11 +194,11 @@ func TestRecordVocabResult_ProgressIsPerProfile(t *testing.T) {
 	}
 
 	var count int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE song_id = ? AND vocab_id = ?`, songID, vocabID).Scan(&count); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE vocab_id = ?`, vocabID).Scan(&count); err != nil {
 		t.Fatalf("count vocab_progress: %v", err)
 	}
 	if count != 2 {
-		t.Errorf("vocab_progress rows for this song/word across both profiles = %d, want 2", count)
+		t.Errorf("vocab_progress rows for this word across both profiles = %d, want 2", count)
 	}
 }
 
@@ -226,7 +241,7 @@ func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
@@ -253,7 +268,7 @@ func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if _, err := RecordVocabResult(database, userA, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userA, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult (user A): %v", err)
 	}
 
@@ -289,7 +304,7 @@ func TestVocabSessionSummary_AnsweringNewCardMovesItToInProgress(t *testing.T) {
 		t.Fatalf("initial summary = %+v, want New=1/InProgress=0", summary)
 	}
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
@@ -317,7 +332,7 @@ func TestVocabSessionSummary_GraduatedCardDisappearsFromAllBuckets(t *testing.T)
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
 	for i := 0; i < len(srs.LearningSteps); i++ {
-		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 			t.Fatalf("RecordVocabResult: %v", err)
 		}
 	}
@@ -343,15 +358,15 @@ func TestVocabSessionSummary_PreviouslyGraduatedCardDueTodayIsOld(t *testing.T) 
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
 	for i := 0; i < len(srs.LearningSteps); i++ {
-		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 			t.Fatalf("RecordVocabResult: %v", err)
 		}
 	}
 	// Simulate the graduating interval having already elapsed — this word
 	// was reviewed on a previous day and is due again today.
 	if _, err := database.Exec(
-		`UPDATE vocab_progress SET due = datetime('now', '-1 hour') WHERE user_id = ? AND song_id = ? AND vocab_id = ?`,
-		userID, songID, vocabID,
+		`UPDATE vocab_progress SET due = datetime('now', '-1 hour') WHERE user_id = ? AND vocab_id = ?`,
+		userID, vocabID,
 	); err != nil {
 		t.Fatalf("simulate past due: %v", err)
 	}
@@ -367,7 +382,7 @@ func TestVocabSessionSummary_PreviouslyGraduatedCardDueTodayIsOld(t *testing.T) 
 		t.Errorf("New/InProgress = %d/%d, want 0/0", summary.New, summary.InProgress)
 	}
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, false); err != nil {
 		t.Fatalf("RecordVocabResult (miss): %v", err)
 	}
 	_, summary, err = VocabDrillQueue(database, userID, songID, 20)
@@ -392,7 +407,7 @@ func TestVocabDrillQueue_NextDueAtSetWhenQueueEmpty(t *testing.T) {
 	if _, _, err := VocabDrillQueue(database, userID, songID, 20); err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
@@ -602,6 +617,96 @@ func TestLineDrillQueue_StopsIntroducingOnceWorkingSetIsFull(t *testing.T) {
 	}
 }
 
+// This exercises migrateVocabProgressToGlobal directly: simulates an
+// existing database still in the old per-(user,song,vocab) shape, with the
+// same word diverged across two songs, and verifies the migration merges
+// them into one row — keeping whichever is furthest along — under the new
+// UNIQUE(user_id, vocab_id) constraint.
+func TestMigrateVocabProgressToGlobal_MergesDivergedPerSongRows(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songA, vocabID, _ := testSong(t, database)
+	songB, err := IngestSong(database, IngestPayload{
+		Song: IngestSongMeta{Title: "第二の歌", Artist: "Demo", Language: "ja"},
+		Vocab: []IngestVocabRow{
+			{Surface: "歩く", Reading: "あるく", Furi: "歩[ある]く", POS: "verb", BaseMeaning: "to walk", ContextMeaning: "a different context", FirstLinePosition: 0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("IngestSong (song B): %v", err)
+	}
+
+	// Recreate vocab_progress in the old per-song shape and seed two
+	// diverged rows for the same (user, vocab): song A is further along
+	// (interval_days=10) than song B (interval_days=2) — the migration
+	// should keep song A's numbers.
+	if _, err := database.Exec(`DROP TABLE vocab_progress`); err != nil {
+		t.Fatalf("drop vocab_progress: %v", err)
+	}
+	if _, err := database.Exec(`
+		CREATE TABLE vocab_progress (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			song_id INTEGER NOT NULL,
+			vocab_id INTEGER NOT NULL,
+			state TEXT NOT NULL DEFAULT 'new',
+			step_index INTEGER NOT NULL DEFAULT 0,
+			ease_factor REAL NOT NULL DEFAULT 2.5,
+			interval_days REAL NOT NULL DEFAULT 0,
+			lapses INTEGER NOT NULL DEFAULT 0,
+			seen INTEGER NOT NULL DEFAULT 0,
+			correct INTEGER NOT NULL DEFAULT 0,
+			due TEXT NOT NULL DEFAULT (datetime('now')),
+			last_seen TEXT,
+			introduced_at TEXT,
+			UNIQUE(user_id, song_id, vocab_id)
+		)
+	`); err != nil {
+		t.Fatalf("recreate old-shape vocab_progress: %v", err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, interval_days, seen, correct)
+		VALUES (?, ?, ?, 'review', 10, 5, 5)
+	`, userID, songA, vocabID); err != nil {
+		t.Fatalf("seed song A row: %v", err)
+	}
+	if _, err := database.Exec(`
+		INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, interval_days, seen, correct)
+		VALUES (?, ?, ?, 'learning', 2, 2, 1)
+	`, userID, songB, vocabID); err != nil {
+		t.Fatalf("seed song B row: %v", err)
+	}
+
+	if err := migrateVocabProgressToGlobal(database); err != nil {
+		t.Fatalf("migrateVocabProgressToGlobal: %v", err)
+	}
+
+	hasSongID, err := hasColumn(database, "vocab_progress", "song_id")
+	if err != nil {
+		t.Fatalf("hasColumn: %v", err)
+	}
+	if hasSongID {
+		t.Error("vocab_progress still has a song_id column after migration")
+	}
+
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, vocabID).Scan(&count); err != nil {
+		t.Fatalf("count vocab_progress: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("rows for (user, vocab) after migration = %d, want 1", count)
+	}
+
+	var state string
+	var intervalDays float64
+	if err := database.QueryRow(`SELECT state, interval_days FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, vocabID).Scan(&state, &intervalDays); err != nil {
+		t.Fatalf("query merged row: %v", err)
+	}
+	if state != "review" || intervalDays != 10 {
+		t.Errorf("merged row = state=%q interval_days=%v, want state=\"review\" interval_days=10 (song A's more-advanced row)", state, intervalDays)
+	}
+}
+
 func TestListVocabProgress_DefaultsUntouchedWordsToNew(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
@@ -679,9 +784,9 @@ func TestVocabSessionSummary_AtCapReflectsDailyCap(t *testing.T) {
 
 	for _, vocabID := range vocabIDs {
 		if _, err := database.Exec(`
-			INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
-			VALUES (?, ?, ?, 'review', 0, 2.5, 5, 0, 3, 3, datetime('now', '+1 day'), datetime('now'), datetime('now'))
-		`, userID, songID, vocabID); err != nil {
+			INSERT INTO vocab_progress (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, 'review', 0, 2.5, 5, 0, 3, 3, datetime('now', '+1 day'), datetime('now'), datetime('now'))
+		`, userID, vocabID); err != nil {
 			t.Fatalf("seed graduated word: %v", err)
 		}
 	}
@@ -744,6 +849,51 @@ func TestVocabDrillQueue_StopsIntroducingOnceWorkingSetIsFull(t *testing.T) {
 	}
 }
 
+// This is the other half of the global-progress request: a word already
+// known from one song must not consume a *second* song's new-word budget
+// when it's also introduced there — it should just show up as its real,
+// shared state without a fresh "new" slot being spent on it.
+func TestVocabDrillQueue_SharedWordDoesNotDoubleCountAgainstSecondSongsCap(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songA, vocabID, _ := testSong(t, database)
+
+	payload := IngestPayload{
+		Song: IngestSongMeta{Title: "第二の歌", Artist: "Demo", Language: "ja"},
+		Vocab: []IngestVocabRow{
+			{Surface: "歩く", Reading: "あるく", Furi: "歩[ある]く", POS: "verb", BaseMeaning: "to walk", ContextMeaning: "a different context", FirstLinePosition: 0},
+		},
+	}
+	songB, err := IngestSong(database, payload)
+	if err != nil {
+		t.Fatalf("IngestSong (song B): %v", err)
+	}
+
+	// Introduce + fully graduate the word via song A.
+	if _, _, err := VocabDrillQueue(database, userID, songA, 20); err != nil {
+		t.Fatalf("VocabDrillQueue (song A): %v", err)
+	}
+	for i := 0; i < len(srs.LearningSteps); i++ {
+		if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
+			t.Fatalf("RecordVocabResult: %v", err)
+		}
+	}
+
+	// Song B's queue must not re-introduce it as a new word — introducedToday
+	// scoped to song B should show it (the word does belong to song B and
+	// was introduced today), but New should be 0 since it already graduated.
+	_, summary, err := VocabDrillQueue(database, userID, songB, 20)
+	if err != nil {
+		t.Fatalf("VocabDrillQueue (song B): %v", err)
+	}
+	if summary.New != 0 {
+		t.Errorf("song B's New = %d, want 0 (the word is already known, not a fresh introduction)", summary.New)
+	}
+	if summary.IntroducedToday != 1 {
+		t.Errorf("song B's IntroducedToday = %d, want 1 (the shared word does belong to song B too)", summary.IntroducedToday)
+	}
+}
+
 func TestVocabSessionSummary_AtCapFalseBelowDailyCap(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
@@ -774,7 +924,7 @@ func TestListVocabProgress_BucketReflectsState(t *testing.T) {
 		t.Errorf("Bucket = %q, want %q for an untouched word", items[0].Bucket, "new")
 	}
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, false); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 	if items, err = ListVocabProgress(database, userID, songID); err != nil {
@@ -785,7 +935,7 @@ func TestListVocabProgress_BucketReflectsState(t *testing.T) {
 	}
 
 	for i := 0; i < len(srs.LearningSteps); i++ {
-		if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+		if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 			t.Fatalf("RecordVocabResult: %v", err)
 		}
 	}
@@ -796,7 +946,7 @@ func TestListVocabProgress_BucketReflectsState(t *testing.T) {
 		t.Errorf("Bucket = %q, want %q for a graduated card below the mastered interval", items[0].Bucket, "done")
 	}
 
-	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+	if err := BurnVocabProgress(database, userID, vocabID); err != nil {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 	if items, err = ListVocabProgress(database, userID, songID); err != nil {
@@ -828,7 +978,7 @@ func TestListSongs_FullyMasteredReflectsAllVocabMastered(t *testing.T) {
 		t.Error("FullyMastered = true, want false before any word is mastered")
 	}
 
-	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+	if err := BurnVocabProgress(database, userID, vocabID); err != nil {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 
@@ -852,7 +1002,7 @@ func TestListVocabProgress_ReflectsRealProgress(t *testing.T) {
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, false); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, false); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
@@ -876,7 +1026,7 @@ func TestBurnVocabProgress(t *testing.T) {
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+	if err := BurnVocabProgress(database, userID, vocabID); err != nil {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 
@@ -902,10 +1052,10 @@ func TestBurnVocabProgress_PreservesExistingDrillHistory(t *testing.T) {
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
-	if err := BurnVocabProgress(database, userID, songID, vocabID); err != nil {
+	if err := BurnVocabProgress(database, userID, vocabID); err != nil {
 		t.Fatalf("BurnVocabProgress: %v", err)
 	}
 
@@ -924,15 +1074,15 @@ func TestResetVocabProgress(t *testing.T) {
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
 
-	if _, err := RecordVocabResult(database, userID, songID, vocabID, true); err != nil {
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
-	if err := ResetVocabProgress(database, userID, songID, vocabID); err != nil {
+	if err := ResetVocabProgress(database, userID, vocabID); err != nil {
 		t.Fatalf("ResetVocabProgress: %v", err)
 	}
 
 	var count int
-	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`, userID, songID, vocabID).Scan(&count); err != nil {
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, vocabID).Scan(&count); err != nil {
 		t.Fatalf("count vocab_progress: %v", err)
 	}
 	if count != 0 {
@@ -960,6 +1110,141 @@ func TestResetVocabProgress(t *testing.T) {
 	}
 	if !found {
 		t.Error("reset card did not reappear as new in the drill queue")
+	}
+}
+
+// ResetAllVocabProgress resets every word belonging to one song — and,
+// since progress is global, a word shared with another song is reset there
+// too, not merely unlinked from the song the reset was triggered from.
+func TestResetAllVocabProgress(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+	songA, vocabID, _ := testSong(t, database)
+
+	payload := IngestPayload{
+		Song: IngestSongMeta{Title: "第二の歌", Artist: "Demo", Language: "ja"},
+		Vocab: []IngestVocabRow{
+			{Surface: "歩く", Reading: "あるく", Furi: "歩[ある]く", POS: "verb", BaseMeaning: "to walk", ContextMeaning: "a different context", FirstLinePosition: 0},
+			{Surface: "見る", Reading: "みる", Furi: "見[み]る", POS: "verb", BaseMeaning: "to see", ContextMeaning: "to look at something", FirstLinePosition: 0},
+		},
+	}
+	songB, err := IngestSong(database, payload)
+	if err != nil {
+		t.Fatalf("IngestSong (song B): %v", err)
+	}
+
+	if _, err := RecordVocabResult(database, userID, vocabID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+
+	if err := ResetAllVocabProgress(database, userID, songB); err != nil {
+		t.Fatalf("ResetAllVocabProgress (song B): %v", err)
+	}
+
+	// The shared word (also in song B) must have been reset, even though the
+	// reset was triggered from song B, not the song it was originally
+	// answered from.
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, vocabID).Scan(&count); err != nil {
+		t.Fatalf("count vocab_progress: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("vocab_progress rows for the shared word after resetting song B = %d, want 0", count)
+	}
+
+	items, err := ListVocabProgress(database, userID, songA)
+	if err != nil {
+		t.Fatalf("ListVocabProgress (song A): %v", err)
+	}
+	if items[0].State != string(srs.StageNew) {
+		t.Errorf("song A's view of the word after song B's reset-all: state = %q, want %q", items[0].State, srs.StageNew)
+	}
+}
+
+// This is the "add this sentence's words to my drilling" action: every
+// not-yet-seen word in the line should get introduced immediately,
+// bypassing DailyNewWordCap/WorkingSetLimit entirely, while a word that
+// already has progress (from anywhere) is left untouched.
+func TestIntroduceLineVocab_IntroducesEveryNewWordInTheLine(t *testing.T) {
+	database := openTestDB(t)
+	userID := defaultUserID(t, database)
+
+	payload := IngestPayload{
+		Song: IngestSongMeta{Title: "二人", Artist: "Demo", Language: "ja"},
+		Lines: []IngestLine{
+			{
+				Position: 0, Text: "二人で歩いて見る", Reading: "ふたりであるいてみる",
+				Furi: "二人[ふたり]で歩[ある]いて見[み]る", Literal: "two people walk look", Natural: "test",
+				Contextual: "test",
+				Words: []IngestWord{
+					{Surface: "歩く", Reading: "あるく", Furi: "歩[ある]く", POS: "verb", BaseMeaning: "to walk", ContextMeaning: "walking together"},
+					{Surface: "見る", Reading: "みる", Furi: "見[み]る", POS: "verb", BaseMeaning: "to see", ContextMeaning: "looking together"},
+				},
+			},
+		},
+		Vocab: []IngestVocabRow{
+			{Surface: "歩く", Reading: "あるく", Furi: "歩[ある]く", POS: "verb", BaseMeaning: "to walk", ContextMeaning: "walking together", FirstLinePosition: 0},
+			{Surface: "見る", Reading: "みる", Furi: "見[み]る", POS: "verb", BaseMeaning: "to see", ContextMeaning: "looking together", FirstLinePosition: 0},
+		},
+	}
+	songID, err := IngestSong(database, payload)
+	if err != nil {
+		t.Fatalf("IngestSong: %v", err)
+	}
+	var lineID, walkID, seeID int64
+	if err := database.QueryRow(`SELECT id FROM lines WHERE song_id = ?`, songID).Scan(&lineID); err != nil {
+		t.Fatalf("lookup line id: %v", err)
+	}
+	if err := database.QueryRow(`SELECT id FROM vocab WHERE surface = ?`, "歩く").Scan(&walkID); err != nil {
+		t.Fatalf("lookup 歩く id: %v", err)
+	}
+	if err := database.QueryRow(`SELECT id FROM vocab WHERE surface = ?`, "見る").Scan(&seeID); err != nil {
+		t.Fatalf("lookup 見る id: %v", err)
+	}
+
+	// 歩く already has progress from elsewhere — must be left untouched, not
+	// reset back to a fresh 'new' row.
+	if _, err := RecordVocabResult(database, userID, walkID, true); err != nil {
+		t.Fatalf("RecordVocabResult: %v", err)
+	}
+
+	added, summary, err := IntroduceLineVocab(database, userID, songID, lineID)
+	if err != nil {
+		t.Fatalf("IntroduceLineVocab: %v", err)
+	}
+	if added != 1 {
+		t.Errorf("added = %d, want 1 (only 見る was not yet seen)", added)
+	}
+	if summary.New != 1 {
+		t.Errorf("New = %d, want 1", summary.New)
+	}
+	if summary.InProgress != 1 {
+		t.Errorf("InProgress = %d, want 1 (歩く, untouched by this call)", summary.InProgress)
+	}
+
+	var seenForWalk int
+	if err := database.QueryRow(`SELECT seen FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, walkID).Scan(&seenForWalk); err != nil {
+		t.Fatalf("query 歩く progress: %v", err)
+	}
+	if seenForWalk != 1 {
+		t.Errorf("歩く's seen = %d, want 1 (must not be reset/re-seeded by IntroduceLineVocab)", seenForWalk)
+	}
+
+	var stateForSee string
+	if err := database.QueryRow(`SELECT state FROM vocab_progress WHERE user_id = ? AND vocab_id = ?`, userID, seeID).Scan(&stateForSee); err != nil {
+		t.Fatalf("query 見る progress: %v", err)
+	}
+	if stateForSee != string(srs.StageNew) {
+		t.Errorf("見る's state = %q, want %q", stateForSee, srs.StageNew)
+	}
+
+	// Calling it again must be a no-op (nothing left in the line to introduce).
+	added, _, err = IntroduceLineVocab(database, userID, songID, lineID)
+	if err != nil {
+		t.Fatalf("IntroduceLineVocab (2nd call): %v", err)
+	}
+	if added != 0 {
+		t.Errorf("added on 2nd call = %d, want 0", added)
 	}
 }
 

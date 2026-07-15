@@ -189,6 +189,21 @@ export function addMoreVocab(songId: number, count?: number): Promise<VocabSessi
 	});
 }
 
+export interface AddLineVocabResult {
+	added: number;
+	summary: VocabSessionSummary;
+}
+
+// Introduces every not-yet-seen word in one line right now, bypassing both
+// the daily cap and the working-set drip-feed — "add this sentence's words
+// to my drilling," from the vocab browser's line-filtered view.
+export function addLineVocab(songId: number, lineId: number): Promise<AddLineVocabResult> {
+	return request('/drill/vocab/add-line', {
+		method: 'POST',
+		body: JSON.stringify({ song_id: songId, line_id: lineId })
+	});
+}
+
 export function getLineDrillQueue(
 	songId: number,
 	limit = 20,
@@ -214,10 +229,12 @@ export interface DrillResult {
 	state: 'new' | 'learning' | 'review' | 'relearning';
 }
 
-export function recordVocabResult(songId: number, vocabId: number, correct: boolean): Promise<DrillResult> {
+// No song_id: vocab progress is global per word (see backend/db/schema.sql's
+// vocab_progress table), so recording a result only needs the word itself.
+export function recordVocabResult(vocabId: number, correct: boolean): Promise<DrillResult> {
 	return request('/drill/result', {
 		method: 'POST',
-		body: JSON.stringify({ type: 'vocab', song_id: songId, vocab_id: vocabId, correct })
+		body: JSON.stringify({ type: 'vocab', vocab_id: vocabId, correct })
 	});
 }
 
@@ -309,17 +326,30 @@ export function listVocabProgress(songId?: number, fetchFn?: typeof fetch): Prom
 
 // Manually flags a word as already known, regardless of its real drill
 // history — an SRS override, not a substitute for actually drilling it.
-export function burnVocabProgress(songId: number, vocabId: number): Promise<{ ok: boolean }> {
+// Global (see backend/db/schema.sql): burns the word everywhere it appears,
+// not just in whichever song's Progress page this was called from.
+export function burnVocabProgress(vocabId: number): Promise<{ ok: boolean }> {
 	return request('/progress/vocab/burn', {
 		method: 'POST',
-		body: JSON.stringify({ song_id: songId, vocab_id: vocabId })
+		body: JSON.stringify({ vocab_id: vocabId })
 	});
 }
 
-// Wipes a word's progress for the active profile back to "new".
-export function resetVocabProgress(songId: number, vocabId: number): Promise<{ ok: boolean }> {
+// Wipes a word's progress for the active profile back to "new". Global:
+// resets the word everywhere it appears, not just in this song.
+export function resetVocabProgress(vocabId: number): Promise<{ ok: boolean }> {
 	return request('/progress/vocab/reset', {
 		method: 'POST',
-		body: JSON.stringify({ song_id: songId, vocab_id: vocabId })
+		body: JSON.stringify({ vocab_id: vocabId })
+	});
+}
+
+// Resets every word belonging to one song — the Progress page's "reset all"
+// action. Since progress is global, a word shared with another song is
+// reset there too, not merely unlinked from this song.
+export function resetAllVocabProgress(songId: number): Promise<{ ok: boolean }> {
+	return request('/progress/vocab/reset-all', {
+		method: 'POST',
+		body: JSON.stringify({ song_id: songId })
 	});
 }

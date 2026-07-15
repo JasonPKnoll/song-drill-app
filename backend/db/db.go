@@ -123,7 +123,81 @@ func migrate(database *sql.DB) error {
 			return fmt.Errorf("add %s.%s: %w", m.table, m.column, err)
 		}
 	}
+
+	if err := migrateVocabProgressToGlobal(database); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateVocabProgressToGlobal consolidates vocab_progress from being keyed
+// per (user, song, vocab) to per (user, vocab) — the same word now shares
+// one SRS track across every song it appears in, rather than a separate
+// track per song. For a word that had diverged progress across songs
+// (multiple rows for the same user+vocab, from back when tracks were
+// per-song), keeps whichever row is furthest along — highest interval
+// first, then most seen, then most recently touched — and drops the rest,
+// then rebuilds the table under the new UNIQUE(user_id, vocab_id)
+// constraint. This is real review history, not disposable test data, so it
+// gets merged rather than dropped.
+func migrateVocabProgressToGlobal(database *sql.DB) error {
+	hasSongID, err := hasColumn(database, "vocab_progress", "song_id")
+	if err != nil {
+		return fmt.Errorf("check vocab_progress.song_id: %w", err)
+	}
+	if !hasSongID {
+		return nil // already migrated (or a brand-new database)
+	}
+
+	tx, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		CREATE TABLE vocab_progress_global (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
+			state         TEXT NOT NULL DEFAULT 'new',
+			step_index    INTEGER NOT NULL DEFAULT 0,
+			ease_factor   REAL NOT NULL DEFAULT 2.5,
+			interval_days REAL NOT NULL DEFAULT 0,
+			lapses        INTEGER NOT NULL DEFAULT 0,
+			seen          INTEGER NOT NULL DEFAULT 0,
+			correct       INTEGER NOT NULL DEFAULT 0,
+			due           TEXT NOT NULL DEFAULT (datetime('now')),
+			last_seen     TEXT,
+			introduced_at TEXT,
+			UNIQUE(user_id, vocab_id)
+		)
+	`); err != nil {
+		return fmt.Errorf("create vocab_progress_global: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO vocab_progress_global (user_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+		SELECT vp.user_id, vp.vocab_id, vp.state, vp.step_index, vp.ease_factor, vp.interval_days, vp.lapses, vp.seen, vp.correct, vp.due, vp.last_seen, vp.introduced_at
+		FROM vocab_progress vp
+		WHERE vp.id = (
+			SELECT id FROM vocab_progress vp2
+			WHERE vp2.user_id = vp.user_id AND vp2.vocab_id = vp.vocab_id
+			ORDER BY vp2.interval_days DESC, vp2.seen DESC, vp2.last_seen DESC, vp2.id DESC
+			LIMIT 1
+		)
+	`); err != nil {
+		return fmt.Errorf("consolidate vocab_progress rows: %w", err)
+	}
+
+	if _, err := tx.Exec(`DROP TABLE vocab_progress`); err != nil {
+		return fmt.Errorf("drop old vocab_progress: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE vocab_progress_global RENAME TO vocab_progress`); err != nil {
+		return fmt.Errorf("rename vocab_progress_global: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // ensureDefaultUser guarantees at least one profile exists, returning its

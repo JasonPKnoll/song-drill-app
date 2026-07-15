@@ -75,6 +75,7 @@ func main() {
 	{
 		drill.GET("/vocab", env.VocabDrillQueue)
 		drill.POST("/vocab/more", env.AddMoreVocab)
+		drill.POST("/vocab/add-line", env.AddLineVocab)
 		drill.GET("/lines", env.LineDrillQueue)
 		drill.POST("/lines/more", env.AddMoreLines)
 		drill.POST("/result", env.RecordDrillResult)
@@ -87,6 +88,7 @@ func main() {
 		progress.GET("/vocab", env.ListVocabProgress)
 		progress.POST("/vocab/burn", env.BurnVocabProgress)
 		progress.POST("/vocab/reset", env.ResetVocabProgress)
+		progress.POST("/vocab/reset-all", env.ResetAllVocabProgress)
 	}
 
 	api.GET("/profiles", env.ListProfiles)

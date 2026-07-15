@@ -1,6 +1,12 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import { listVocabProgress, burnVocabProgress, resetVocabProgress, type VocabProgressItem } from '$lib/api';
+	import {
+		listVocabProgress,
+		burnVocabProgress,
+		resetVocabProgress,
+		resetAllVocabProgress,
+		type VocabProgressItem
+	} from '$lib/api';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -15,6 +21,8 @@
 	let actionError = $state<string | null>(null);
 	let resetTarget = $state<VocabProgressItem | null>(null);
 	let markKnownTarget = $state<VocabProgressItem | null>(null);
+	let resetAllConfirm = $state(false);
+	let resetAllBusy = $state(false);
 
 	$effect(() => {
 		items = data.items;
@@ -54,8 +62,10 @@
 	});
 
 	function itemKey(it: VocabProgressItem): number {
-		// Progress is per (song, vocab), not just vocab — the same word can
-		// appear once per song it's in, each with its own SRS track.
+		// Progress itself is global (one shared track per word, not per song —
+		// see backend/db/schema.sql), but this page can still list the same
+		// word once per song it appears in when browsing across the whole
+		// library, so the row key still needs song+vocab to stay unique.
 		return it.song_id * 1_000_000 + it.vocab_id;
 	}
 
@@ -70,7 +80,7 @@
 		busyId = itemKey(it);
 		actionError = null;
 		try {
-			await burnVocabProgress(it.song_id, it.vocab_id);
+			await burnVocabProgress(it.vocab_id);
 			await refresh();
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
@@ -86,12 +96,27 @@
 		busyId = itemKey(it);
 		actionError = null;
 		try {
-			await resetVocabProgress(it.song_id, it.vocab_id);
+			await resetVocabProgress(it.vocab_id);
 			await refresh();
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
 		} finally {
 			busyId = null;
+		}
+	}
+
+	async function confirmResetAll() {
+		resetAllConfirm = false;
+		if (data.songId === undefined) return;
+		resetAllBusy = true;
+		actionError = null;
+		try {
+			await resetAllVocabProgress(data.songId);
+			await refresh();
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : String(e);
+		} finally {
+			resetAllBusy = false;
 		}
 	}
 
@@ -113,6 +138,21 @@
 	<h1 class="text-2xl font-semibold text-ink">
 		{songTitle ? `${songTitle} · Progress` : 'Progress'}
 	</h1>
+	{#if data.songId !== undefined && items.length > 0}
+		<button
+			type="button"
+			disabled={resetAllBusy}
+			class={cn(
+				'px-3 py-1.5 text-sm font-medium',
+				'border border-bad bg-bad/10 text-bad',
+				'rounded-lg transition hover:bg-bad/20',
+				'disabled:opacity-50'
+			)}
+			onclick={() => (resetAllConfirm = true)}
+		>
+			{resetAllBusy ? 'Resetting…' : 'Reset all'}
+		</button>
+	{/if}
 </div>
 
 {#if data.error}
@@ -171,7 +211,15 @@
 				'rounded-2xl'
 			)}
 		>
-			{items.length === 0 ? 'No vocab in the library yet.' : `No words match "${query}".`}
+			{#if items.length === 0}
+				No vocab in the library yet.
+			{:else if query.trim()}
+				No words match "{query.trim()}".
+			{:else if bucketFilter !== 'all'}
+				No words in that category.
+			{:else}
+				No words to show.
+			{/if}
 		</div>
 	{:else}
 		<p class="mb-3 text-sm text-muted">{filtered.length} of {items.length} words</p>
@@ -255,7 +303,7 @@
 	open={resetTarget !== null}
 	title="Reset progress?"
 	message={resetTarget
-		? `Reset progress on "${resetTarget.surface}" (${resetTarget.song_title})? This can't be undone.`
+		? `Reset progress on "${resetTarget.surface}"? This can't be undone. Progress on this word is shared across every song it appears in, so it resets everywhere, not just here.`
 		: ''}
 	confirmLabel="Reset"
 	danger
@@ -264,10 +312,20 @@
 />
 
 <ConfirmDialog
+	open={resetAllConfirm}
+	title="Reset all progress in this song?"
+	message={`Reset progress on every word in "${songTitle ?? 'this song'}"? This can't be undone. Any of these words also learned through another song get reset there too, since progress is shared per word, not per song.`}
+	confirmLabel="Reset all"
+	danger
+	onConfirm={confirmResetAll}
+	onCancel={() => (resetAllConfirm = false)}
+/>
+
+<ConfirmDialog
 	open={markKnownTarget !== null}
 	title="Mark as known?"
 	message={markKnownTarget
-		? `Mark "${markKnownTarget.surface}" as known? This skips its normal review schedule and marks it mastered — you can always reset it back to new later.`
+		? `Mark "${markKnownTarget.surface}" as known? This skips its normal review schedule and marks it mastered — you can always reset it back to new later. This applies everywhere this word appears, since progress is shared across songs.`
 		: ''}
 	confirmLabel="Mark known"
 	onConfirm={confirmMarkKnown}

@@ -65,6 +65,35 @@ func (e *Env) AddMoreVocab(c *gin.Context) {
 	writeJSON(c, http.StatusOK, summary)
 }
 
+// addLineVocabRequest is the body of POST /api/song-drill/drill/vocab/add-line.
+type addLineVocabRequest struct {
+	SongID int64 `json:"song_id"`
+	LineID int64 `json:"line_id"`
+}
+
+// POST /api/song-drill/drill/vocab/add-line
+// Introduces every not-yet-seen word in one line right now, bypassing both
+// db.DailyNewWordCap and db.WorkingSetLimit — the "add this sentence's
+// words to my drilling" action from the vocab browser's line-filtered view.
+func (e *Env) AddLineVocab(c *gin.Context) {
+	var req addLineVocabRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.SongID == 0 || req.LineID == 0 {
+		writeError(c, http.StatusBadRequest, "song_id and line_id are required")
+		return
+	}
+
+	added, summary, err := db.IntroduceLineVocab(e.DB, userIDFromContext(c), req.SongID, req.LineID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(c, http.StatusOK, gin.H{"added": added, "summary": summary})
+}
+
 // GET /api/song-drill/drill/lines?song_id=&limit=
 func (e *Env) LineDrillQueue(c *gin.Context) {
 	songID, err := parseRequiredSongID(c)
@@ -127,11 +156,11 @@ func (e *Env) RecordDrillResult(c *gin.Context) {
 	var state string
 	switch req.Type {
 	case "vocab":
-		if req.SongID == nil || req.VocabID == nil {
-			writeError(c, http.StatusBadRequest, "song_id and vocab_id are required for type=vocab")
+		if req.VocabID == nil {
+			writeError(c, http.StatusBadRequest, "vocab_id is required for type=vocab")
 			return
 		}
-		next, err := db.RecordVocabResult(e.DB, userID, *req.SongID, *req.VocabID, req.Correct)
+		next, err := db.RecordVocabResult(e.DB, userID, *req.VocabID, req.Correct)
 		if err != nil {
 			writeError(c, http.StatusInternalServerError, err.Error())
 			return

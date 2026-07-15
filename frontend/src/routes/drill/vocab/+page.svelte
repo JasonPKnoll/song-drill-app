@@ -102,7 +102,7 @@
 		const card = current;
 		queue = queue.slice(1);
 		try {
-			await recordVocabResult(card.song_id, card.vocab_id, correct);
+			await recordVocabResult(card.vocab_id, correct);
 			actionError = null;
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);

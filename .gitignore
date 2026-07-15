@@ -1,7 +1,11 @@
 # Backend
 backend/song-drill-api
 backend/*.db
+backend/*.db-wal
+backend/*.db-shm
 *.db
+*.db-wal
+*.db-shm
 
 # Frontend
 frontend/node_modules/

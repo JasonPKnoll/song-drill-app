@@ -68,10 +68,20 @@ CREATE TABLE IF NOT EXISTS line_words (
 -- review, with relearning on a lapse from review) — see backend/srs/srs.go,
 -- the single source of truth for the scheduling algorithm itself; this table
 -- only stores whatever that package's State struct needs persisted.
+--
+-- Global per (profile, word) — NOT per song. The same word reviewed from
+-- two different songs is the same review track; whichever song you drill
+-- it from, you're advancing (and seeing) the one shared state. Only
+-- song_vocab.context_meaning stays per-song. What IS still scoped per song
+-- is the *daily new-word pacing* (see VocabDrillQueue/DailyNewWordCap/
+-- WorkingSetLimit in queries.go) — each song gets its own budget for
+-- introducing words that have never been seen in ANY song yet; once a word
+-- has a row here (from whichever song first introduced it), every other
+-- song containing that word just shows it whenever it's actually due,
+-- without spending its own budget on it.
 CREATE TABLE IF NOT EXISTS vocab_progress (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    song_id       INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
     vocab_id      INTEGER NOT NULL REFERENCES vocab(id),
     state         TEXT NOT NULL DEFAULT 'new',            -- new | learning | review | relearning
     step_index    INTEGER NOT NULL DEFAULT 0,             -- position within the current learning/relearning steps
@@ -82,8 +92,8 @@ CREATE TABLE IF NOT EXISTS vocab_progress (
     correct       INTEGER NOT NULL DEFAULT 0,
     due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are seconds-scale
     last_seen     TEXT,
-    introduced_at TEXT,                                   -- when this word was assigned into a daily new-word batch (nullable; see VocabDrillQueue's daily cap)
-    UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
+    introduced_at TEXT,                                   -- when this word was first assigned into a daily new-word batch (nullable; see VocabDrillQueue's daily cap)
+    UNIQUE(user_id, vocab_id)                             -- progress is per profile, per word — global across songs
 );
 
 -- SRS progress for line cards (same state machine as vocab_progress).
