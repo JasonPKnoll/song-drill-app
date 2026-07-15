@@ -82,6 +82,7 @@ func migrate(database *sql.DB) error {
 		ddl    string
 	}{
 		{"lines", "section", `ALTER TABLE lines ADD COLUMN section TEXT`},
+		{"vocab_progress", "introduced_at", `ALTER TABLE vocab_progress ADD COLUMN introduced_at TEXT`},
 	}
 
 	for _, m := range columnMigrations {

@@ -1,6 +1,12 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import { recordVocabResult, type VocabCard } from '$lib/api';
+	import {
+		recordVocabResult,
+		getVocabDrillQueue,
+		addMoreVocab,
+		type VocabCard,
+		type VocabSessionSummary
+	} from '$lib/api';
 	import DrillCard from '$lib/components/DrillCard.svelte';
 	import Furigana from '$lib/components/Furigana.svelte';
 	import BackLink from '$lib/components/BackLink.svelte';
@@ -9,76 +15,129 @@
 	let { data }: { data: PageData } = $props();
 
 	let queue = $state<VocabCard[]>([]);
-	let done = $state(0);
-	// vocab_ids that have been answered at least once this session — lets the
-	// "left" count split into "new" (never touched yet) vs "in progress" (still
-	// in rotation because it hasn't graduated, whether from a miss or just not
-	// enough correct reps yet), Anki-style.
-	let attemptedIds = $state<Set<number>>(new Set());
+	let summary = $state<VocabSessionSummary>({
+		new_today: 0,
+		new_cap: 0,
+		in_progress_today: 0,
+		completed_today: 0
+	});
 	let actionError = $state<string | null>(null);
+	let addingMore = $state(false);
 
 	$effect(() => {
 		queue = data.queue;
-		done = 0;
-		attemptedIds = new Set();
+		summary = data.summary;
 		actionError = null;
+	});
+
+	// Re-fetches the small due batch + today's cap summary from the server —
+	// the source of truth for "what's due right now," replacing the old
+	// approach of manually re-inserting an answered card into a local array
+	// (which ignored its real `due` timestamp entirely). Called right after
+	// every answer, so a newly-due card can surface as soon as the very next
+	// fetch reflects it, not just once the whole local batch is drained.
+	async function refresh() {
+		try {
+			const result = await getVocabDrillQueue(data.songId);
+			queue = result.cards;
+			summary = result.summary;
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	// While there's nothing to show, keep checking — this is what makes an
+	// in-progress card (due again in 10s/30s/2m) reappear on its own once its
+	// time is near, instead of requiring the user to reload the page.
+	$effect(() => {
+		const id = setInterval(() => {
+			if (queue.length === 0) refresh();
+		}, 2500);
+		return () => clearInterval(id);
 	});
 
 	let backHref = $derived(data.songId !== undefined ? `/songs/${data.songId}` : '/');
 	let backLabel = $derived(data.songId !== undefined ? 'Back to song' : 'Back to library');
 	let current = $derived(queue[0] ?? null);
-	let newCount = $derived(queue.filter((c) => !attemptedIds.has(c.vocab_id)).length);
-	let inProgressCount = $derived(queue.length - newCount);
+	// Today's introduced cohort, split the same way the old client-side
+	// bookkeeping used to (new / in-progress / done) — but derived from the
+	// server's per-day counts, so it doesn't reset just because the page
+	// reloaded or the local queue emptied out.
+	let notStartedToday = $derived(
+		Math.max(0, summary.new_today - summary.in_progress_today - summary.completed_today)
+	);
+	let atCap = $derived(summary.new_today >= summary.new_cap);
 
 	async function answer(correct: boolean) {
 		if (!current) return;
 		const card = current;
-		const wasAlreadyAttempted = attemptedIds.has(card.vocab_id);
-		attemptedIds = new Set(attemptedIds).add(card.vocab_id);
 		queue = queue.slice(1);
 		try {
-			const result = await recordVocabResult(card.song_id, card.vocab_id, correct);
-			// Still mid-way through today's learning/relearning steps (e.g. a
-			// miss resets it, or a pass hasn't graduated it yet) — keep it in
-			// this session's rotation instead of counting it done.
-			if (result.state === 'learning' || result.state === 'relearning') {
-				queue = [...queue, card];
-			} else {
-				done += 1;
-			}
+			await recordVocabResult(card.song_id, card.vocab_id, correct);
+			actionError = null;
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : String(e);
 			// The server never recorded this attempt (request failed) — put the
-			// card back at the front instead of letting it vanish from the
-			// session's counts with no state change actually having happened.
-			if (!wasAlreadyAttempted) {
-				const reverted = new Set(attemptedIds);
-				reverted.delete(card.vocab_id);
-				attemptedIds = reverted;
-			}
+			// card back at the front instead of letting it silently vanish from
+			// the session with no state change actually having happened.
 			queue = [card, ...queue];
+			return;
 		}
+		await refresh();
+	}
+
+	async function handleAddMore() {
+		addingMore = true;
+		try {
+			await addMoreVocab();
+			actionError = null;
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : String(e);
+		}
+		await refresh();
+		addingMore = false;
 	}
 </script>
 
 <BackLink href={backHref} label={backLabel} />
 
-<div class="mb-6 flex items-center justify-between">
+<div class="mb-2 flex items-center justify-between">
 	<h1 class="text-2xl font-semibold text-ink">Vocab Drill</h1>
-	<div class="flex items-center gap-3" title="{newCount} new · {inProgressCount} in progress · {done} done">
+	<div
+		class="flex items-center gap-3"
+		title="{notStartedToday} new · {summary.in_progress_today} in progress · {summary.completed_today} done today"
+	>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-new"></span>
-			<span class="text-sm text-muted tabular-nums">{newCount}</span>
+			<span class="text-sm text-muted tabular-nums">{notStartedToday}</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-accent"></span>
-			<span class="text-sm text-muted tabular-nums">{inProgressCount}</span>
+			<span class="text-sm text-muted tabular-nums">{summary.in_progress_today}</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span class="h-2 w-2 rounded-full bg-good"></span>
-			<span class="text-sm text-muted tabular-nums">{done}</span>
+			<span class="text-sm text-muted tabular-nums">{summary.completed_today}</span>
 		</span>
 	</div>
+</div>
+
+<div class="mb-6 flex items-center justify-between">
+	<p class="text-sm text-muted tabular-nums">
+		{summary.new_today}/{summary.new_cap} new words introduced today
+	</p>
+	<button
+		type="button"
+		disabled={addingMore}
+		onclick={handleAddMore}
+		class={cn(
+			'text-sm font-medium text-accent',
+			'transition hover:opacity-80 disabled:opacity-50',
+			'no-focus-ring'
+		)}
+	>
+		{addingMore ? 'Adding…' : '+ Add 5 more'}
+	</button>
 </div>
 
 {#if data.error}
@@ -92,7 +151,13 @@
 			'rounded-2xl'
 		)}
 	>
-		Nothing due right now. Nice work.
+		{#if summary.in_progress_today > 0}
+			Nothing due right now — in-progress words will come back around shortly.
+		{:else if atCap}
+			All {summary.new_cap} of today's words are done. Nice work.
+		{:else}
+			Nothing due right now. Nice work.
+		{/if}
 	</div>
 {:else}
 	{#key `${current.song_id}-${current.vocab_id}`}

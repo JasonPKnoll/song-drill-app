@@ -80,8 +80,9 @@ CREATE TABLE IF NOT EXISTS vocab_progress (
     lapses        INTEGER NOT NULL DEFAULT 0,              -- times missed while in the review state
     seen          INTEGER NOT NULL DEFAULT 0,
     correct       INTEGER NOT NULL DEFAULT 0,
-    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
+    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are seconds-scale
     last_seen     TEXT,
+    introduced_at TEXT,                                   -- when this word was assigned into a daily new-word batch (nullable; see VocabDrillQueue's daily cap)
     UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
 );
 

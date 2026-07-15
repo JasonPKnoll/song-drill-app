@@ -65,6 +65,17 @@ export interface VocabCard {
 	due: string;
 }
 
+// Today's progress against the daily new-word cap (see schema.md's "Daily
+// new-word cap" section) — server-computed so the UI's new/in-progress/done
+// counts reflect real per-day DB state, not local session bookkeeping that
+// would reset on every page load.
+export interface VocabSessionSummary {
+	new_today: number;
+	new_cap: number;
+	in_progress_today: number;
+	completed_today: number;
+}
+
 export interface LineCard {
 	line_id: number;
 	song_id: number;
@@ -119,15 +130,29 @@ export function ingestSong(payload: unknown): Promise<{ song_id: number }> {
 	return request('/songs/ingest', { method: 'POST', body: JSON.stringify(payload) });
 }
 
+// A small "handful" rather than the whole due backlog — the drill session
+// polls for fresh cards on a timer instead of loading everything up front,
+// so this only needs to cover what's visible at once.
+export const VOCAB_SESSION_LIMIT = 8;
+
 export function getVocabDrillQueue(
 	songId?: number,
-	limit = 20,
+	limit = VOCAB_SESSION_LIMIT,
 	fetchFn?: typeof fetch
-): Promise<VocabCard[]> {
+): Promise<{ cards: VocabCard[]; summary: VocabSessionSummary }> {
 	const params = new URLSearchParams();
 	if (songId !== undefined) params.set('song_id', String(songId));
 	params.set('limit', String(limit));
 	return request(`/drill/vocab?${params}`, undefined, fetchFn);
+}
+
+// Introduces more brand-new words right now, bypassing the daily cap — "add
+// more if wanted".
+export function addMoreVocab(count?: number, songId?: number): Promise<VocabSessionSummary> {
+	return request('/drill/vocab/more', {
+		method: 'POST',
+		body: JSON.stringify({ count, song_id: songId })
+	});
 }
 
 export function getLineDrillQueue(

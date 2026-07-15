@@ -10,7 +10,7 @@
 
 	let items = $state<VocabProgressItem[]>([]);
 	let query = $state('');
-	let bucketFilter = $state<'all' | 'new' | 'progress' | 'done'>('all');
+	let bucketFilter = $state<'all' | 'new' | 'progress' | 'done' | 'burned'>('all');
 	let busyId = $state<number | null>(null);
 	let actionError = $state<string | null>(null);
 	let resetTarget = $state<VocabProgressItem | null>(null);
@@ -22,22 +22,26 @@
 	// Same three-way grouping as the drill counters (blue new / purple in
 	// progress / green done) — learning and relearning both read as
 	// "still being worked on" here, there's no reason to split them further
-	// on a progress overview.
-	function bucket(state: VocabProgressItem['state']): 'new' | 'progress' | 'done' {
-		if (state === 'new') return 'new';
-		if (state === 'review') return 'done';
+	// on a progress overview. Mastered/burned cards are pulled into their
+	// own bucket regardless of stage (in practice always "review"), so
+	// "Done" reads as "graduated and still on its own schedule" while
+	// "Burned" is specifically the manually-deactivated ones.
+	function bucket(it: VocabProgressItem): 'new' | 'progress' | 'done' | 'burned' {
+		if (it.mastered) return 'burned';
+		if (it.state === 'new') return 'new';
+		if (it.state === 'review') return 'done';
 		return 'progress';
 	}
 
 	let counts = $derived.by(() => {
-		const c = { new: 0, progress: 0, done: 0 };
-		for (const it of items) c[bucket(it.state)]++;
+		const c = { new: 0, progress: 0, done: 0, burned: 0 };
+		for (const it of items) c[bucket(it)]++;
 		return c;
 	});
 
 	let filtered = $derived.by(() => {
 		let list = items;
-		if (bucketFilter !== 'all') list = list.filter((it) => bucket(it.state) === bucketFilter);
+		if (bucketFilter !== 'all') list = list.filter((it) => bucket(it) === bucketFilter);
 		const raw = query.trim();
 		if (raw) {
 			const q = raw.toLowerCase();
@@ -131,6 +135,13 @@
 		<button type="button" class={filterChipClass(bucketFilter === 'done')} onclick={() => (bucketFilter = 'done')}>
 			<span class="mr-1.5 inline-block h-2 w-2 rounded-full bg-good"></span>Done {counts.done}
 		</button>
+		<button
+			type="button"
+			class={filterChipClass(bucketFilter === 'burned')}
+			onclick={() => (bucketFilter = 'burned')}
+		>
+			<span class="mr-1.5 inline-block h-2 w-2 rounded-full bg-good grayscale"></span>Burned {counts.burned}
+		</button>
 	</div>
 
 	<input
@@ -164,7 +175,7 @@
 		<p class="mb-3 text-sm text-muted">{filtered.length} of {items.length} words</p>
 		<ul class="flex flex-col gap-2">
 			{#each filtered as it (itemKey(it))}
-				{@const b = bucket(it.state)}
+				{@const b = bucket(it)}
 				<li
 					class={cn(
 						'flex flex-wrap items-center gap-3 p-4',

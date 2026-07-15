@@ -24,12 +24,42 @@ func (e *Env) VocabDrillQueue(w http.ResponseWriter, r *http.Request) {
 		songIDPtr = &songID
 	}
 
-	cards, err := db.VocabDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
+	cards, summary, err := db.VocabDrillQueue(e.DB, userIDFromContext(r.Context()), songIDPtr, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, cards)
+	writeJSON(w, http.StatusOK, map[string]any{"cards": cards, "summary": summary})
+}
+
+// addMoreVocabRequest is the body of POST /api/song-drill/drill/vocab/more.
+type addMoreVocabRequest struct {
+	SongID *int64 `json:"song_id,omitempty"`
+	Count  int    `json:"count,omitempty"`
+}
+
+const defaultAddMoreCount = 5
+
+// POST /api/song-drill/drill/vocab/more
+// Introduces more brand-new words right now, bypassing db.DailyNewWordCap —
+// the "add more if wanted" escape hatch from the drill session.
+func (e *Env) AddMoreVocab(w http.ResponseWriter, r *http.Request) {
+	var req addMoreVocabRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	count := req.Count
+	if count <= 0 {
+		count = defaultAddMoreCount
+	}
+
+	summary, err := db.IntroduceMoreVocab(e.DB, userIDFromContext(r.Context()), req.SongID, count)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 // GET /api/song-drill/drill/lines?song_id=&limit=

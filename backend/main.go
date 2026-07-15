@@ -54,6 +54,7 @@ func main() {
 		})
 		r.Route("/drill", func(r chi.Router) {
 			r.Get("/vocab", env.VocabDrillQueue)
+			r.Post("/vocab/more", env.AddMoreVocab)
 			r.Get("/lines", env.LineDrillQueue)
 			r.Post("/result", env.RecordDrillResult)
 		})

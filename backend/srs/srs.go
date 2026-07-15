@@ -1,5 +1,5 @@
 // Package srs implements an Anki-style spaced-repetition scheduler: new
-// cards move through same-day "learning" steps (minutes-scale), graduate
+// cards move through same-day "learning" steps (seconds-scale), graduate
 // into day-scale "review" intervals governed by a per-card ease factor,
 // and a miss in review drops the card into "relearning" (same-day steps
 // again) before it re-graduates. This mirrors Anki's classic SM-2-derived
@@ -31,11 +31,13 @@ const (
 	StageRelearning Stage = "relearning"
 )
 
-// Learning/relearning steps, in minutes — Anki's own defaults ("1m 10m"
-// learning steps, "10m" relearning step).
+// Learning/relearning steps, in seconds. Three escalating steps, so a card
+// needs three consecutive correct answers (any miss resets it to the first
+// step) to graduate — same-day, fast enough to keep a session moving
+// without waiting minutes between reps.
 var (
-	LearningSteps   = []int{1, 10}
-	RelearningSteps = []int{10}
+	LearningSteps   = []int{10, 30, 120}
+	RelearningSteps = []int{10, 30, 120}
 )
 
 const (
@@ -117,7 +119,7 @@ func answerSteps(s State, stage Stage, steps []int, correct bool, now time.Time)
 		// behavior.
 		s.Stage = stage
 		s.StepIndex = 0
-		s.Due = now.Add(time.Duration(steps[0]) * time.Minute)
+		s.Due = now.Add(time.Duration(steps[0]) * time.Second)
 		return s
 	}
 
@@ -137,7 +139,7 @@ func answerSteps(s State, stage Stage, steps []int, correct bool, now time.Time)
 	}
 
 	s.Stage = stage
-	s.Due = now.Add(time.Duration(steps[s.StepIndex-1]) * time.Minute)
+	s.Due = now.Add(time.Duration(steps[s.StepIndex-1]) * time.Second)
 	return s
 }
 
@@ -157,7 +159,7 @@ func answerReview(s State, correct bool, now time.Time) State {
 	s.IntervalDays = MinIntervalDays
 	s.Stage = StageRelearning
 	s.StepIndex = 0
-	s.Due = now.Add(time.Duration(RelearningSteps[0]) * time.Minute)
+	s.Due = now.Add(time.Duration(RelearningSteps[0]) * time.Second)
 	return s
 }
 

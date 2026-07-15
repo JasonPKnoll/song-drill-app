@@ -174,8 +174,9 @@ CREATE TABLE vocab_progress (
     lapses        INTEGER NOT NULL DEFAULT 0,             -- times missed while in the review state
     seen          INTEGER NOT NULL DEFAULT 0,
     correct       INTEGER NOT NULL DEFAULT 0,
-    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are minutes-scale
+    due           TEXT NOT NULL DEFAULT (datetime('now')), -- full datetime: learning/relearning steps are seconds-scale
     last_seen     TEXT,
+    introduced_at TEXT,                     -- when this word was assigned into a daily new-word batch (nullable; see "Daily new-word cap" below)
     UNIQUE(user_id, song_id, vocab_id)      -- progress is per profile, per song — not global
 );
 
@@ -210,12 +211,14 @@ never computes SRS state, it only calls API endpoints and renders results.
 **Stages:** `new` → `learning` → `review`, with a miss in `review` dropping
 the card into `relearning` before it re-graduates back to `review`.
 
-**Learning / relearning** (same-day, minutes-scale):
-- Learning steps: `1m, 10m` — a correct answer advances one step; passing
-  the last step graduates the card into `review` with a 1-day interval.
-- Relearning step: `10m` — same mechanic, entered on a review-stage lapse;
-  graduating back out restores the interval assigned at the moment of lapse
-  (see below), not the standard 1-day graduating interval.
+**Learning / relearning** (same-day, seconds-scale):
+- Learning steps: `10s, 30s, 2m` — a correct answer advances one step;
+  passing all three (three consecutive correct answers, no intervening
+  miss) graduates the card into `review` with a 1-day interval.
+- Relearning steps: `10s, 30s, 2m` — same mechanic and same three-step
+  requirement, entered on a review-stage lapse; graduating back out
+  restores the interval assigned at the moment of lapse (see below), not
+  the standard 1-day graduating interval.
 - A miss during learning/relearning resets to the **first** step — same-day,
   shown again soon — not out of the phase entirely. This is the "resets
   progress for that word for the day" behavior.
@@ -232,6 +235,28 @@ the card into `relearning` before it re-graduates back to `review`.
 
 **Mastered** (a display/stats concept, not part of the algorithm): a card
 in the `review` stage with `interval_days >= 30`.
+
+---
+
+## Daily new-word cap (vocab only)
+
+Not part of `srs.go`'s scheduling algorithm — this is queue/day policy,
+implemented in `backend/db/queries.go` around `VocabDrillQueue`.
+
+- At most `DailyNewWordCap` (10) brand-new words are introduced into a
+  profile's rotation per calendar day, **global across all songs** — not
+  per song.
+- "Introduced" is tracked via `vocab_progress.introduced_at`: when
+  `VocabDrillQueue` is called and today's introduced count is under the
+  cap, it eagerly inserts `vocab_progress` rows (state `new`, due now) for
+  enough not-yet-seen words to fill the remaining slots, stamping
+  `introduced_at = now`. This reserves the day's set so re-fetching the
+  queue (e.g. a page reload) doesn't roll a different random 10.
+- `POST /drill/vocab/more` (`IntroduceMoreVocab`) bypasses the cap on
+  demand — introduces N more words immediately regardless of today's
+  total, for "I want to learn more today" sessions.
+- Line drill has no equivalent cap — `line_progress` has no
+  `introduced_at` column.
 
 ---
 

@@ -35,7 +35,7 @@ func TestAnswer_NewCardGraduatesOnlyAfterAllLearningSteps(t *testing.T) {
 				t.Fatalf("after correct answer %d/%d: Stage = %q, want %q (should not graduate yet)",
 					i+1, len(LearningSteps), s.Stage, StageLearning)
 			}
-			wantDue := now.Add(time.Duration(step) * time.Minute)
+			wantDue := now.Add(time.Duration(step) * time.Second)
 			if !s.Due.Equal(wantDue) {
 				t.Errorf("after correct answer %d: Due = %v, want %v", i+1, s.Due, wantDue)
 			}
@@ -65,7 +65,7 @@ func TestAnswer_LearningMissResetsToFirstStep(t *testing.T) {
 	if s.StepIndex != 0 {
 		t.Errorf("StepIndex = %d, want 0", s.StepIndex)
 	}
-	wantDue := missAt.Add(time.Duration(LearningSteps[0]) * time.Minute)
+	wantDue := missAt.Add(time.Duration(LearningSteps[0]) * time.Second)
 	if !s.Due.Equal(wantDue) {
 		t.Errorf("Due = %v, want %v", s.Due, wantDue)
 	}
@@ -107,7 +107,7 @@ func TestAnswer_ReviewLapseEntersRelearning(t *testing.T) {
 	if s.IntervalDays != MinIntervalDays {
 		t.Errorf("IntervalDays = %v, want %v", s.IntervalDays, MinIntervalDays)
 	}
-	wantDue := epoch.Add(time.Duration(RelearningSteps[0]) * time.Minute)
+	wantDue := epoch.Add(time.Duration(RelearningSteps[0]) * time.Second)
 	if !s.Due.Equal(wantDue) {
 		t.Errorf("Due = %v, want %v", s.Due, wantDue)
 	}

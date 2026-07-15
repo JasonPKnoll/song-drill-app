@@ -131,6 +131,17 @@ type LineCard struct {
 	Due         string  `json:"due"`
 }
 
+// VocabSessionSummary describes today's progress against the daily new-word
+// cap (see VocabDrillQueue / IntroduceMoreVocab in queries.go) — the
+// frontend uses this instead of deriving "new/in-progress/done" counts from
+// its own local session bookkeeping, so it reflects real per-day DB state.
+type VocabSessionSummary struct {
+	NewToday        int `json:"new_today"`
+	NewCap          int `json:"new_cap"`
+	InProgressToday int `json:"in_progress_today"`
+	CompletedToday  int `json:"completed_today"`
+}
+
 type Stats struct {
 	TotalSongs    int `json:"total_songs"`
 	TotalVocab    int `json:"total_vocab"`

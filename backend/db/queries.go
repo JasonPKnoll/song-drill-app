@@ -13,6 +13,22 @@ import (
 // SQL (e.g. `WHERE due <= datetime('now')`) without a custom SQL function.
 const sqliteDatetimeLayout = "2006-01-02 15:04:05"
 
+// DailyNewWordCap is how many brand-new words VocabDrillQueue will
+// introduce into a profile's rotation per calendar day, global across all
+// songs — queue/day policy, not scheduling algorithm, so it lives here
+// rather than in srs.go. See the "Daily new-word cap" section of
+// schema.md. IntroduceMoreVocab bypasses this on request.
+const DailyNewWordCap = 10
+
+// vocabDBTX is satisfied by both *sql.DB and *sql.Tx, so the daily-cap
+// helpers below can run either inside VocabDrillQueue's transaction or
+// standalone from IntroduceMoreVocab.
+type vocabDBTX interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 func formatDue(t time.Time) string {
 	return t.UTC().Format(sqliteDatetimeLayout)
 }
@@ -359,33 +375,180 @@ func GetSongLines(database *sql.DB, songID int64) ([]Line, error) {
 	return lines, rows.Err()
 }
 
-// VocabDrillQueue returns due vocab cards (or all-time-new cards with no progress
-// row yet) for the given profile, earliest due first. If songID is nil, pulls
-// across all songs.
-func VocabDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) ([]VocabCard, error) {
+// introducedTodayCount returns how many brand-new words have already been
+// assigned into this profile's rotation today (UTC calendar day).
+func introducedTodayCount(tx vocabDBTX, userID int64) (int, error) {
+	var n int
+	err := tx.QueryRow(
+		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND date(introduced_at) = date('now')`,
+		userID,
+	).Scan(&n)
+	return n, err
+}
+
+// introduceNewVocab eagerly creates up to `count` fresh vocab_progress rows
+// (state 'new', due now, introduced_at now) for words this profile has
+// never seen before, so a page refresh doesn't roll a different random set
+// for today — see the "Daily new-word cap" section of schema.md. Respects
+// songID if given; callers decide how many slots to fill (VocabDrillQueue
+// stops at the daily cap, IntroduceMoreVocab doesn't check the cap at all).
+func introduceNewVocab(tx vocabDBTX, userID int64, songID *int64, count int, now time.Time) error {
+	if count <= 0 {
+		return nil
+	}
 	query := `
-		SELECT
-			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, v.base_meaning,
-			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note, l.section,
-			COALESCE(vp.state, 'new'), COALESCE(vp.due, datetime('now'))
+		SELECT sv.song_id, sv.vocab_id
 		FROM song_vocab sv
-		JOIN vocab v ON v.id = sv.vocab_id
-		JOIN songs s ON s.id = sv.song_id
-		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
 		LEFT JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
-		WHERE (vp.due IS NULL OR vp.due <= datetime('now'))
+		WHERE vp.id IS NULL
 	`
 	args := []any{userID}
 	if songID != nil {
 		query += " AND sv.song_id = ?"
 		args = append(args, *songID)
 	}
-	query += " ORDER BY COALESCE(vp.due, datetime('now')) ASC, sv.first_line_position ASC LIMIT ?"
+	query += " ORDER BY sv.first_line_position ASC LIMIT ?"
+	args = append(args, count)
+
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	type candidate struct{ songID, vocabID int64 }
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.songID, &c.vocabID); err != nil {
+			rows.Close()
+			return err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	nowStr := formatDue(now)
+	for _, c := range candidates {
+		if _, err := tx.Exec(`
+			INSERT INTO vocab_progress (user_id, song_id, vocab_id, state, step_index, ease_factor, interval_days, lapses, seen, correct, due, last_seen, introduced_at)
+			VALUES (?, ?, ?, 'new', 0, ?, 0, 0, 0, 0, ?, NULL, ?)
+		`, userID, c.songID, c.vocabID, srs.StartingEase, nowStr, nowStr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// vocabSessionSummary reports today's progress against DailyNewWordCap:
+// how many new words were introduced today, how many are still mid-rotation,
+// and how many have already graduated to review — all scoped to today's
+// introduced_at cohort, not lifetime totals across every word ever studied.
+func vocabSessionSummary(tx vocabDBTX, userID int64) (VocabSessionSummary, error) {
+	sum := VocabSessionSummary{NewCap: DailyNewWordCap}
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND date(introduced_at) = date('now')`,
+		userID,
+	).Scan(&sum.NewToday); err != nil {
+		return sum, err
+	}
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND date(introduced_at) = date('now') AND state IN ('learning', 'relearning')`,
+		userID,
+	).Scan(&sum.InProgressToday); err != nil {
+		return sum, err
+	}
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM vocab_progress WHERE user_id = ? AND date(introduced_at) = date('now') AND state = 'review'`,
+		userID,
+	).Scan(&sum.CompletedToday); err != nil {
+		return sum, err
+	}
+	return sum, nil
+}
+
+// IntroduceMoreVocab introduces exactly `count` more brand-new words into
+// the profile's rotation right now, bypassing DailyNewWordCap — the "add
+// more if wanted" escape hatch from the drill UI.
+func IntroduceMoreVocab(database *sql.DB, userID int64, songID *int64, count int) (VocabSessionSummary, error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return VocabSessionSummary{}, err
+	}
+	defer tx.Rollback()
+
+	if err := introduceNewVocab(tx, userID, songID, count, time.Now()); err != nil {
+		return VocabSessionSummary{}, err
+	}
+	summary, err := vocabSessionSummary(tx, userID)
+	if err != nil {
+		return VocabSessionSummary{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return VocabSessionSummary{}, err
+	}
+	return summary, nil
+}
+
+// VocabDrillQueue returns due vocab cards (or all-time-new cards with no progress
+// row yet) for the given profile, earliest due first. If songID is nil, pulls
+// across all songs. Before selecting, tops up today's new-word cohort up to
+// DailyNewWordCap if there's room — see introduceNewVocab and the "Daily
+// new-word cap" section of schema.md.
+func VocabDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) ([]VocabCard, VocabSessionSummary, error) {
+	tx, err := database.Begin()
+	if err != nil {
+		return nil, VocabSessionSummary{}, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+	introducedToday, err := introducedTodayCount(tx, userID)
+	if err != nil {
+		return nil, VocabSessionSummary{}, err
+	}
+	if remaining := DailyNewWordCap - introducedToday; remaining > 0 {
+		if err := introduceNewVocab(tx, userID, songID, remaining, now); err != nil {
+			return nil, VocabSessionSummary{}, err
+		}
+	}
+
+	summary, err := vocabSessionSummary(tx, userID)
+	if err != nil {
+		return nil, VocabSessionSummary{}, err
+	}
+
+	query := `
+		SELECT
+			sv.song_id, s.title, v.id, v.surface, v.reading, v.furi, v.base_meaning,
+			l.id, l.song_id, l.position, l.text, l.reading, l.furi, l.literal, l.natural, l.contextual, l.grammar_note, l.section,
+			vp.state, vp.due
+		FROM song_vocab sv
+		JOIN vocab v ON v.id = sv.vocab_id
+		JOIN songs s ON s.id = sv.song_id
+		LEFT JOIN lines l ON l.song_id = sv.song_id AND l.position = sv.first_line_position
+		JOIN vocab_progress vp ON vp.song_id = sv.song_id AND vp.vocab_id = sv.vocab_id AND vp.user_id = ?
+		WHERE vp.due <= datetime('now')
+	`
+	// vocab_progress is now an inner join, not left — a word with no progress
+	// row at all means it's beyond today's cap (introduceNewVocab above is
+	// the only thing that creates rows for never-seen words), so it must not
+	// leak into the queue. A stray NULL-due row can't happen either: every
+	// row this query can see was either created here with due=now or by
+	// RecordVocabResult, both of which always set due.
+	args := []any{userID}
+	if songID != nil {
+		query += " AND sv.song_id = ?"
+		args = append(args, *songID)
+	}
+	query += " ORDER BY vp.due ASC, sv.first_line_position ASC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := database.Query(query, args...)
+	rows, err := tx.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, VocabSessionSummary{}, err
 	}
 	defer rows.Close()
 
@@ -400,7 +563,7 @@ func VocabDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) (
 			&lineID, &lineSongID, &linePosition, &lineText, &lineReading, &lineFuri, &lineLiteral, &lineNatural, &lineContextual, &lineGrammarNote, &lineSection,
 			&c.State, &c.Due,
 		); err != nil {
-			return nil, err
+			return nil, VocabSessionSummary{}, err
 		}
 
 		if lineID.Valid {
@@ -420,7 +583,14 @@ func VocabDrillQueue(database *sql.DB, userID int64, songID *int64, limit int) (
 
 		cards = append(cards, c)
 	}
-	return cards, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, VocabSessionSummary{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, VocabSessionSummary{}, err
+	}
+	return cards, summary, nil
 }
 
 // LineDrillQueue returns due line cards for the given profile, earliest due

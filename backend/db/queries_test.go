@@ -46,7 +46,7 @@ func testSong(t *testing.T, database *sql.DB) (songID, vocabID, lineID int64) {
 // instantly puts it in done" bug report: a brand-new card must take two
 // separate correct answers (matching srs.LearningSteps) before it leaves
 // learning/relearning — never after just one.
-func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.T) {
+func TestRecordVocabResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
 	songID, vocabID, _ := testSong(t, database)
@@ -63,16 +63,24 @@ func TestRecordVocabResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing
 	if err != nil {
 		t.Fatalf("second RecordVocabResult: %v", err)
 	}
-	if second.Stage != srs.StageReview {
-		t.Fatalf("after 2nd correct answer: Stage = %q, want %q", second.Stage, srs.StageReview)
+	if second.Stage != srs.StageLearning {
+		t.Fatalf("after 2nd correct answer: Stage = %q, want %q (should not be done yet)", second.Stage, srs.StageLearning)
+	}
+
+	third, err := RecordVocabResult(database, userID, songID, vocabID, true)
+	if err != nil {
+		t.Fatalf("third RecordVocabResult: %v", err)
+	}
+	if third.Stage != srs.StageReview {
+		t.Fatalf("after 3rd correct answer: Stage = %q, want %q", third.Stage, srs.StageReview)
 	}
 
 	var seen, correct int
 	if err := database.QueryRow(`SELECT seen, correct FROM vocab_progress WHERE user_id = ? AND song_id = ? AND vocab_id = ?`, userID, songID, vocabID).Scan(&seen, &correct); err != nil {
 		t.Fatalf("query seen/correct: %v", err)
 	}
-	if seen != 2 || correct != 2 {
-		t.Errorf("seen=%d correct=%d, want seen=2 correct=2", seen, correct)
+	if seen != 3 || correct != 3 {
+		t.Errorf("seen=%d correct=%d, want seen=3 correct=3", seen, correct)
 	}
 }
 
@@ -177,7 +185,7 @@ func TestRecordVocabResult_ProgressIsPerProfile(t *testing.T) {
 	}
 }
 
-func TestRecordLineResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.T) {
+func TestRecordLineResult_NewCardRequiresThreeCorrectAnswersToGraduate(t *testing.T) {
 	database := openTestDB(t)
 	userID := defaultUserID(t, database)
 	_, _, lineID := testSong(t, database)
@@ -194,13 +202,21 @@ func TestRecordLineResult_NewCardRequiresTwoCorrectAnswersToGraduate(t *testing.
 	if err != nil {
 		t.Fatalf("second RecordLineResult: %v", err)
 	}
-	if second.Stage != srs.StageReview {
-		t.Fatalf("after 2nd correct answer: Stage = %q, want %q", second.Stage, srs.StageReview)
+	if second.Stage != srs.StageLearning {
+		t.Fatalf("after 2nd correct answer: Stage = %q, want %q", second.Stage, srs.StageLearning)
+	}
+
+	third, err := RecordLineResult(database, userID, lineID, true)
+	if err != nil {
+		t.Fatalf("third RecordLineResult: %v", err)
+	}
+	if third.Stage != srs.StageReview {
+		t.Fatalf("after 3rd correct answer: Stage = %q, want %q", third.Stage, srs.StageReview)
 	}
 }
 
 // VocabDrillQueue must not surface a card whose due time is still in the
-// future (e.g. a learning-stage card due again in 1 minute) — otherwise it
+// future (e.g. a learning-stage card due again in 10 seconds) — otherwise it
 // would immediately reappear in the same session and could be answered
 // through its steps far faster than the schedule intends.
 func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
@@ -212,13 +228,13 @@ func TestVocabDrillQueue_ExcludesNotYetDueCard(t *testing.T) {
 		t.Fatalf("RecordVocabResult: %v", err)
 	}
 
-	cards, err := VocabDrillQueue(database, userID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userID, &songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
 	for _, c := range cards {
 		if c.VocabID == vocabID {
-			t.Errorf("card %d appeared in queue despite being due ~1 minute in the future", vocabID)
+			t.Errorf("card %d appeared in queue despite being due ~10 seconds in the future", vocabID)
 		}
 	}
 }
@@ -239,7 +255,7 @@ func TestVocabDrillQueue_IsScopedPerProfile(t *testing.T) {
 		t.Fatalf("RecordVocabResult (user A): %v", err)
 	}
 
-	cards, err := VocabDrillQueue(database, userB.ID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userB.ID, &songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue (user B): %v", err)
 	}
@@ -385,7 +401,7 @@ func TestResetVocabProgress(t *testing.T) {
 	}
 
 	// The reset card must also be immediately due again in the drill queue.
-	cards, err := VocabDrillQueue(database, userID, &songID, 20)
+	cards, _, err := VocabDrillQueue(database, userID, &songID, 20)
 	if err != nil {
 		t.Fatalf("VocabDrillQueue: %v", err)
 	}
