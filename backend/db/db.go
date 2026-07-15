@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
@@ -22,24 +22,26 @@ var schemaSQL string
 // both of these, concurrent requests — this app's own empty-queue refresh
 // timer landing at the same moment as a page navigation, for example — can
 // stall each other out long enough to trip the frontend's request timeout.
+//
+// Driver: modernc.org/sqlite, not mattn/go-sqlite3. It's a pure-Go
+// reimplementation of SQLite (registered under the driver name "sqlite"),
+// not a cgo binding to the real C library — so a connection here is a
+// regular goroutine-friendly operation, not a call that blocks a whole OS
+// thread for its duration. It also means no C toolchain is required to
+// build this program at all, which simplifies deploying to the Pi.
 func Open(path string) (*sql.DB, error) {
-	database, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000")
+	database, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	// database/sql pools connections and, left at its default, will happily
-	// open as many as concurrent requests demand. Each one is a real
-	// os-thread-blocking cgo call into SQLite (mattn/go-sqlite3 links the
-	// real C library), so a burst of concurrent requests — WithActiveUser's
-	// per-request profile lookup running in front of every single handler,
-	// stacked with whatever that handler itself queries, stacked with the
-	// drill pages' background refresh timers — can end up wanting several
-	// simultaneous connections to the same SQLite file. Capping this at 1
-	// forces every query in the process through a single real connection;
-	// database/sql then queues the rest in-process (cheap, no OS/network
-	// cost) instead of racing multiple cgo threads against SQLite's own
-	// file locking, which is what busy_timeout above is a safety net for
-	// but shouldn't need to be exercised at all under normal use.
+	// open as many as concurrent requests demand. SQLite itself only ever
+	// allows one writer at a time regardless of driver, and this app's
+	// query volume is trivial (sub-2ms queries) — there's no performance
+	// reason to allow more than one connection, and capping at 1 is the
+	// simplest way to guarantee requests can never contend with each other
+	// over the database at all. WAL/busy_timeout above remain in place as
+	// a second layer of safety, not the primary defense.
 	database.SetMaxOpenConns(1)
 	if err := database.Ping(); err != nil {
 		database.Close()

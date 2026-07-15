@@ -1,11 +1,10 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 
 	"song-drill-backend/db"
 )
@@ -22,27 +21,27 @@ type profileRequest struct {
 }
 
 // GET /api/song-drill/profiles
-func (e *Env) ListProfiles(w http.ResponseWriter, r *http.Request) {
+func (e *Env) ListProfiles(c *gin.Context) {
 	users, err := db.ListUsers(e.DB)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(c, http.StatusOK, users)
 }
 
 // GET /api/song-drill/profiles/active
-func (e *Env) GetActiveProfile(w http.ResponseWriter, r *http.Request) {
-	user, err := db.GetUser(e.DB, userIDFromContext(r.Context()))
+func (e *Env) GetActiveProfile(c *gin.Context) {
+	user, err := db.GetUser(e.DB, userIDFromContext(c))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if user == nil {
-		writeError(w, http.StatusInternalServerError, "active profile no longer exists")
+		writeError(c, http.StatusInternalServerError, "active profile no longer exists")
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(c, http.StatusOK, user)
 }
 
 type setActiveProfileRequest struct {
@@ -50,41 +49,35 @@ type setActiveProfileRequest struct {
 }
 
 // POST /api/song-drill/profiles/active
-func (e *Env) SetActiveProfile(w http.ResponseWriter, r *http.Request) {
+func (e *Env) SetActiveProfile(c *gin.Context) {
 	var req setActiveProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	user, err := db.GetUser(e.DB, req.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if user == nil {
-		writeError(w, http.StatusNotFound, "profile not found")
+		writeError(c, http.StatusNotFound, "profile not found")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     activeProfileCookie,
-		Value:    strconv.FormatInt(user.ID, 10),
-		Path:     "/",
-		MaxAge:   profileCookieMaxAge,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-	writeJSON(w, http.StatusOK, user)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(activeProfileCookie, strconv.FormatInt(user.ID, 10), profileCookieMaxAge, "/", "", false, true)
+	writeJSON(c, http.StatusOK, user)
 }
 
 // POST /api/song-drill/profiles
-func (e *Env) CreateProfile(w http.ResponseWriter, r *http.Request) {
+func (e *Env) CreateProfile(c *gin.Context) {
 	var req profileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if req.DisplayName == "" {
-		writeError(w, http.StatusBadRequest, "display_name is required")
+		writeError(c, http.StatusBadRequest, "display_name is required")
 		return
 	}
 	if req.Color == "" {
@@ -92,26 +85,26 @@ func (e *Env) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := db.CreateUser(e.DB, req.DisplayName, req.Color)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, user)
+	writeJSON(c, http.StatusCreated, user)
 }
 
-// PATCH /api/song-drill/profiles/{id}
-func (e *Env) UpdateProfile(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+// PATCH /api/song-drill/profiles/:id
+func (e *Env) UpdateProfile(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid profile id")
+		writeError(c, http.StatusBadRequest, "invalid profile id")
 		return
 	}
 	var req profileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if req.DisplayName == "" {
-		writeError(w, http.StatusBadRequest, "display_name is required")
+		writeError(c, http.StatusBadRequest, "display_name is required")
 		return
 	}
 	if req.Color == "" {
@@ -119,36 +112,36 @@ func (e *Env) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := db.UpdateUser(e.DB, id, req.DisplayName, req.Color)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !updated {
-		writeError(w, http.StatusNotFound, "profile not found")
+		writeError(c, http.StatusNotFound, "profile not found")
 		return
 	}
 	user, err := db.GetUser(e.DB, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(c, http.StatusOK, user)
 }
 
-// DELETE /api/song-drill/profiles/{id}
-func (e *Env) DeleteProfile(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+// DELETE /api/song-drill/profiles/:id
+func (e *Env) DeleteProfile(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid profile id")
+		writeError(c, http.StatusBadRequest, "invalid profile id")
 		return
 	}
 	deleted, err := db.DeleteUser(e.DB, id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !deleted {
-		writeError(w, http.StatusNotFound, "profile not found")
+		writeError(c, http.StatusNotFound, "profile not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(c, http.StatusOK, gin.H{"ok": true})
 }

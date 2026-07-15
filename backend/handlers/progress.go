@@ -1,52 +1,53 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 
 	"song-drill-backend/db"
 )
 
 // GET /api/song-drill/progress/vocab?song_id=
-func (e *Env) ListVocabProgress(w http.ResponseWriter, r *http.Request) {
-	songID, err := parseRequiredSongID(r)
+func (e *Env) ListVocabProgress(c *gin.Context) {
+	songID, err := parseRequiredSongID(c)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	items, err := db.ListVocabProgress(e.DB, userIDFromContext(r.Context()), songID)
+	items, err := db.ListVocabProgress(e.DB, userIDFromContext(c), songID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(c, http.StatusOK, items)
 }
 
 // POST /api/song-drill/progress/vocab/burn
-func (e *Env) BurnVocabProgress(w http.ResponseWriter, r *http.Request) {
+func (e *Env) BurnVocabProgress(c *gin.Context) {
 	var req db.VocabProgressActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := db.BurnVocabProgress(e.DB, userIDFromContext(r.Context()), req.SongID, req.VocabID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := db.BurnVocabProgress(e.DB, userIDFromContext(c), req.SongID, req.VocabID); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(c, http.StatusOK, gin.H{"ok": true})
 }
 
 // POST /api/song-drill/progress/vocab/reset
-func (e *Env) ResetVocabProgress(w http.ResponseWriter, r *http.Request) {
+func (e *Env) ResetVocabProgress(c *gin.Context) {
 	var req db.VocabProgressActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if err := db.ResetVocabProgress(e.DB, userIDFromContext(r.Context()), req.SongID, req.VocabID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := db.ResetVocabProgress(e.DB, userIDFromContext(c), req.SongID, req.VocabID); err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(c, http.StatusOK, gin.H{"ok": true})
 }

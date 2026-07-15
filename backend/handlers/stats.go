@@ -3,15 +3,17 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/gin-gonic/gin"
+
 	"song-drill-backend/db"
 )
 
 // GET /api/song-drill/stats
-func (e *Env) GetStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := db.GetStats(e.DB, userIDFromContext(r.Context()))
+func (e *Env) GetStats(c *gin.Context) {
+	stats, err := db.GetStats(e.DB, userIDFromContext(c))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(c, http.StatusOK, stats)
 }

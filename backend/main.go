@@ -7,17 +7,16 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 
 	"song-drill-backend/db"
 	"song-drill-backend/handlers"
 )
 
 // logRequestStart logs the instant a request is received, before any
-// middleware or handler work happens. chi's own middleware.Logger only
-// logs once a response has actually been written, so a request that never
+// middleware or handler work happens. gin's own request logger only logs
+// once a response has actually been written, so a request that never
 // completes — the exact "signal timed out, no matching access log line"
 // pattern this was added to debug — leaves no trace at all. This turns
 // "did the request even reach the Go process" from a guess into a fact:
@@ -25,11 +24,9 @@ import (
 // the stuck request. If it doesn't, the problem is upstream of Go entirely
 // (the proxy, the browser). If it does, whatever's next in the log (or
 // the goroutine dump below) says exactly where it got stuck.
-func logRequestStart(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("[arrived] %s %s", r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
+func logRequestStart(c *gin.Context) {
+	log.Printf("[arrived] %s %s", c.Request.Method, c.Request.URL.Path)
+	c.Next()
 }
 
 func main() {
@@ -51,49 +48,53 @@ func main() {
 
 	env := handlers.NewEnv(database)
 
-	r := chi.NewRouter()
-	r.Use(logRequestStart)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type"},
+	r := gin.New()
+	r.Use(logRequestStart, gin.Logger(), gin.Recovery())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type"},
 		AllowCredentials: false,
 	}))
 
-	r.Route("/api/song-drill", func(r chi.Router) {
-		r.Use(env.WithActiveUser)
+	api := r.Group("/api/song-drill")
+	api.Use(env.WithActiveUser)
 
-		r.Route("/songs", func(r chi.Router) {
-			r.Post("/ingest", env.IngestSong)
-			r.Get("/", env.ListSongs)
-			r.Get("/{id}", env.GetSong)
-			r.Delete("/{id}", env.DeleteSong)
-			r.Get("/{id}/lines", env.GetSongLines)
-		})
-		r.Route("/drill", func(r chi.Router) {
-			r.Get("/vocab", env.VocabDrillQueue)
-			r.Post("/vocab/more", env.AddMoreVocab)
-			r.Get("/lines", env.LineDrillQueue)
-			r.Post("/lines/more", env.AddMoreLines)
-			r.Post("/result", env.RecordDrillResult)
-		})
-		r.Get("/stats", env.GetStats)
-		r.Route("/progress", func(r chi.Router) {
-			r.Get("/vocab", env.ListVocabProgress)
-			r.Post("/vocab/burn", env.BurnVocabProgress)
-			r.Post("/vocab/reset", env.ResetVocabProgress)
-		})
-		r.Route("/profiles", func(r chi.Router) {
-			r.Get("/", env.ListProfiles)
-			r.Post("/", env.CreateProfile)
-			r.Get("/active", env.GetActiveProfile)
-			r.Post("/active", env.SetActiveProfile)
-			r.Patch("/{id}", env.UpdateProfile)
-			r.Delete("/{id}", env.DeleteProfile)
-		})
-	})
+	// Registered directly on api (not as sub-groups) for /songs and
+	// /profiles, since both need a route matching the bare group path
+	// itself ("/songs", "/profiles") alongside their sub-paths — simplest
+	// to just spell out the full path on each route than rely on a group's
+	// empty-suffix route.
+	api.POST("/songs/ingest", env.IngestSong)
+	api.GET("/songs", env.ListSongs)
+	api.GET("/songs/:id", env.GetSong)
+	api.DELETE("/songs/:id", env.DeleteSong)
+	api.GET("/songs/:id/lines", env.GetSongLines)
+
+	drill := api.Group("/drill")
+	{
+		drill.GET("/vocab", env.VocabDrillQueue)
+		drill.POST("/vocab/more", env.AddMoreVocab)
+		drill.GET("/lines", env.LineDrillQueue)
+		drill.POST("/lines/more", env.AddMoreLines)
+		drill.POST("/result", env.RecordDrillResult)
+	}
+
+	api.GET("/stats", env.GetStats)
+
+	progress := api.Group("/progress")
+	{
+		progress.GET("/vocab", env.ListVocabProgress)
+		progress.POST("/vocab/burn", env.BurnVocabProgress)
+		progress.POST("/vocab/reset", env.ResetVocabProgress)
+	}
+
+	api.GET("/profiles", env.ListProfiles)
+	api.POST("/profiles", env.CreateProfile)
+	api.GET("/profiles/active", env.GetActiveProfile)
+	api.POST("/profiles/active", env.SetActiveProfile)
+	api.PATCH("/profiles/:id", env.UpdateProfile)
+	api.DELETE("/profiles/:id", env.DeleteProfile)
 
 	// Debug/profiling endpoints (net/http/pprof, registered on
 	// http.DefaultServeMux by the blank import above) — bound to loopback
