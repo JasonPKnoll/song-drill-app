@@ -27,6 +27,20 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// database/sql pools connections and, left at its default, will happily
+	// open as many as concurrent requests demand. Each one is a real
+	// os-thread-blocking cgo call into SQLite (mattn/go-sqlite3 links the
+	// real C library), so a burst of concurrent requests — WithActiveUser's
+	// per-request profile lookup running in front of every single handler,
+	// stacked with whatever that handler itself queries, stacked with the
+	// drill pages' background refresh timers — can end up wanting several
+	// simultaneous connections to the same SQLite file. Capping this at 1
+	// forces every query in the process through a single real connection;
+	// database/sql then queues the rest in-process (cheap, no OS/network
+	// cost) instead of racing multiple cgo threads against SQLite's own
+	// file locking, which is what busy_timeout above is a safety net for
+	// but shouldn't need to be exercised at all under normal use.
+	database.SetMaxOpenConns(1)
 	if err := database.Ping(); err != nil {
 		database.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
